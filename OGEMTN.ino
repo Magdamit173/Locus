@@ -85,7 +85,7 @@ const char PAGE[] PROGMEM = R"html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>SchoolMesh</title>
+<title>OGEMTN</title>
 <style>
 body{font-family:system-ui,Arial,sans-serif;max-width:720px;margin:22px auto;padding:14px;background:#f2f5fa;color:#182230}
 main{background:#fff;padding:20px;border-radius:14px;box-shadow:0 2px 12px #0001}
@@ -98,19 +98,21 @@ small,.muted{color:#667085;font-size:.9rem}
 .hidden{display:none}
 .checkrow{display:flex;align-items:center;gap:9px}
 .checkrow input{width:auto}
-.header-container{display:flex;justify-content:space-between;align-items:center;margin-bottom:15px}
+.header-container{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
 h1{margin:0}
 .badge{font-size:.9rem;font-weight:600;background:#eef2f6;color:#344054;padding:6px 12px;border-radius:20px;display:flex;align-items:center;gap:6px}
 .dot{width:8px;height:8px;background:#12b76a;border-radius:50%;display:inline-block}
 .dot.offline{background:#f04438}
+.mac-display{font-family:monospace;background:#f2f5fa;padding:3px 6px;border-radius:4px;color:#182230}
 </style>
 </head>
 <body>
 <main>
 <div class="header-container">
-  <h1>SchoolMesh</h1>
+  <h1>OGEMTN</h1>
   <div id="nodeBadge" class="badge"><span class="dot offline"></span>Scanning...</div>
 </div>
+<div class="muted" style="margin-bottom:20px;">Node MAC: <span id="myMac" class="mac-display">Loading...</span></div>
 <p class="muted">Decentralized ESP-NOW messaging. The ESP32 only buffers a few live events in RAM. This browser keeps its own local message history.</p>
 <form id="messageForm">
 <label for="mode">Channel</label>
@@ -144,7 +146,8 @@ const sendStatus=document.getElementById('sendStatus');
 const feed=document.getElementById('liveFeed');
 const form=document.getElementById('messageForm');
 const nodeBadge=document.getElementById('nodeBadge');
-const HISTORY_KEY='schoolmesh.messageHistory.v1';
+const macDisplay=document.getElementById('myMac');
+const HISTORY_KEY='ogemtn.messageHistory.v1';
 const MAX_HISTORY=100;
 let cursor=0;
 let polling=false;
@@ -183,18 +186,18 @@ function addBrowserMessage(text){
 
 function updatePrivateBox(){
   privateBox.classList.toggle('hidden',mode.value!=='private');
-  try{localStorage.setItem('schoolmesh.mode',mode.value);}catch(e){}
+  try{localStorage.setItem('ogemtn.mode',mode.value);}catch(e){}
 }
 
 function saveSecret(){
   try{
     if(rememberSecret.checked){
-      if(secret.value) localStorage.setItem('schoolmesh.secret',secret.value);
-      else localStorage.removeItem('schoolmesh.secret');
-      localStorage.setItem('schoolmesh.rememberSecret','1');
+      if(secret.value) localStorage.setItem('ogemtn.secret',secret.value);
+      else localStorage.removeItem('ogemtn.secret');
+      localStorage.setItem('ogemtn.rememberSecret','1');
     }else{
-      localStorage.removeItem('schoolmesh.secret');
-      localStorage.setItem('schoolmesh.rememberSecret','0');
+      localStorage.removeItem('ogemtn.secret');
+      localStorage.setItem('ogemtn.rememberSecret','0');
     }
   }catch(e){}
 }
@@ -217,10 +220,10 @@ async function unlockPrivate(){
 }
 
 try{
-  mode.value=localStorage.getItem('schoolmesh.mode')||'public';
-  const remember=localStorage.getItem('schoolmesh.rememberSecret')!=='0';
+  mode.value=localStorage.getItem('ogemtn.mode')||'public';
+  const remember=localStorage.getItem('ogemtn.rememberSecret')!=='0';
   rememberSecret.checked=remember;
-  secret.value=remember?localStorage.getItem('schoolmesh.secret')||'':'';
+  secret.value=remember?localStorage.getItem('ogemtn.secret')||'':'';
 }catch(e){
   mode.value='public';
   rememberSecret.checked=false;
@@ -267,6 +270,8 @@ async function pollLive(){
       const data=await r.json();
       const latest=Number(data.cursor);
       if(Number.isFinite(latest)) cursor=latest;
+      
+      if(data.mac) macDisplay.textContent = data.mac;
       
       if(data.nodes !== undefined) {
         const isAlone = data.nodes <= 1;
@@ -373,9 +378,9 @@ uint32_t getActiveNodesCount() {
 bool deriveKeys(const String &secret, uint8_t aesKey[32], uint8_t channelId[8]) {
   if (secret.length() == 0) return false;
   uint8_t digest[32];
-  String keyMaterial = "SchoolMesh-AES-v1:" + secret;
+  String keyMaterial = "OGEMTN-AES-v1:" + secret;
   if (mbedtls_sha256((const unsigned char *)keyMaterial.c_str(), keyMaterial.length(), aesKey, 0) != 0) return false;
-  String channelMaterial = "SchoolMesh-Channel-v1:" + secret;
+  String channelMaterial = "OGEMTN-Channel-v1:" + secret;
   if (mbedtls_sha256((const unsigned char *)channelMaterial.c_str(), channelMaterial.length(), digest, 0) != 0) {
     memset(aesKey, 0, 32);
     return false;
@@ -539,7 +544,8 @@ void handleEvents() {
   if (cursor + 1 > first) first = cursor + 1;
   
   uint32_t nodeCount = getActiveNodesCount();
-  String json = "{\"cursor\":" + String(liveEventId) + ",\"nodes\":" + String(nodeCount) + ",\"events\":[";
+  // Include the node MAC in the JSON payload
+  String json = "{\"cursor\":" + String(liveEventId) + ",\"mac\":\"" + macString(nodeMac) + "\",\"nodes\":" + String(nodeCount) + ",\"events\":[";
   
   bool firstItem = true;
   for (uint32_t id = first; id <= liveEventId; id++) {
@@ -687,7 +693,7 @@ void setup() {
   server.begin();
 
   Serial.println();
-  Serial.println("SchoolMesh started.");
+  Serial.println("OGEMTN started.");
   Serial.printf("SSID: %s\n", ssid.c_str());
   Serial.printf("ESP-NOW MAC: %s\n", macString(nodeMac).c_str());
   Serial.printf("Web address: http://%s\n", WiFi.softAPIP().toString().c_str());
