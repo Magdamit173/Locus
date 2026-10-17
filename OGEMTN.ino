@@ -60,7 +60,10 @@ struct SeenEntry {
 
 struct LiveEvent {
   uint32_t id;
-  char text[190];
+  char text[130];
+  char type[10];
+  char group[16];
+  char sender[20]; 
   bool valid;
 };
 
@@ -69,9 +72,15 @@ struct ActiveNode {
   uint32_t lastSeen;
 };
 
+struct RateLimit {
+  uint32_t ip;
+  uint32_t lastPost;
+};
+
 SeenEntry seenCache[SEEN_CACHE_SIZE] = {};
 LiveEvent liveEvents[LIVE_EVENT_COUNT] = {};
 ActiveNode meshNodes[MAX_NODES] = {};
+RateLimit clientLimits[8] = {};
 
 size_t seenIndex = 0;
 size_t liveIndex = 0;
@@ -87,220 +96,380 @@ const char PAGE[] PROGMEM = R"html(
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>OGEMTN</title>
 <style>
-body{font-family:system-ui,Arial,sans-serif;max-width:720px;margin:22px auto;padding:14px;background:#f2f5fa;color:#182230}
-main{background:#fff;padding:20px;border-radius:14px;box-shadow:0 2px 12px #0001}
-input,select,textarea,button{box-sizing:border-box;width:100%;padding:12px;margin:7px 0;font:inherit;border-radius:8px}
-input,select,textarea{border:1px solid #b8c2d0}
-button{background:#175cd3;color:white;border:0;cursor:pointer;font-weight:600}
-button.secondary{background:#667085}
-pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#101828;color:#e6edf3;padding:13px;border-radius:8px;min-height:110px}
-small,.muted{color:#667085;font-size:.9rem}
-.hidden{display:none}
-.checkrow{display:flex;align-items:center;gap:9px}
-.checkrow input{width:auto}
-.header-container{display:flex;justify-content:space-between;align-items:center;margin-bottom:5px}
-h1{margin:0}
-.badge{font-size:.9rem;font-weight:600;background:#eef2f6;color:#344054;padding:6px 12px;border-radius:20px;display:flex;align-items:center;gap:6px}
-.dot{width:8px;height:8px;background:#12b76a;border-radius:50%;display:inline-block}
-.dot.offline{background:#f04438}
-.mac-display{font-family:monospace;background:#f2f5fa;padding:3px 6px;border-radius:4px;color:#182230}
+:root { --bg: #f2f5fa; --surface: #ffffff; --text: #182230; --border: #e2e8f0; --primary: #175cd3; --msg-bg: #f1f5f9; --my-msg: #dbeafe; --danger: #ef4444; --overlay: rgba(0,0,0,0.4); }
+body.dark { --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --border: #334155; --primary: #3b82f6; --msg-bg: #334155; --my-msg: #1e3a8a; --danger: #dc2626; --overlay: rgba(0,0,0,0.7); }
+body { font-family: system-ui, Arial, sans-serif; margin: 0; background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; }
+header { background: var(--surface); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); }
+.app-container { display: flex; flex: 1; overflow: hidden; }
+.sidebar { width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; }
+.channel-list { flex: 1; overflow-y: auto; padding: 10px; }
+.channel { padding: 12px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; font-weight: 500; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.channel:hover { background: var(--bg); }
+.channel.active { background: var(--primary); color: white; }
+.channel-delete { background: var(--danger); color: white; border: none; cursor: pointer; font-size: 1.2rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 0; margin-left: auto; transition: opacity 0.2s; }
+.channel-delete:hover { opacity: 0.8; }
+.add-channel { padding: 15px; border-top: 1px solid var(--border); }
+input, button, select { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 5px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); }
+button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: bold; }
+button.danger { background: var(--danger); }
+button.secondary { background: var(--border); color: var(--text); }
+.chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; }
+.messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+.msg { padding: 10px 14px; border-radius: 12px; max-width: 80%; background: var(--msg-bg); align-self: flex-start; word-wrap: break-word; }
+.msg.self { background: var(--my-msg); align-self: flex-end; }
+.msg-time { font-size: 0.75rem; opacity: 0.7; margin-top: 4px; text-align: right; }
+.composer { background: var(--surface); padding: 15px; border-top: 1px solid var(--border); }
+.quick-chat { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; padding: 5px 0; }
+.quick-btn { width: auto; white-space: nowrap; padding: 6px 12px; font-size: 0.85rem; background: var(--border); color: var(--text); border-radius: 20px; }
+.input-row { display: flex; gap: 10px; }
+.input-row input { margin: 0; }
+.input-row button { margin: 0; width: 80px; }
+details { margin-bottom: 10px; background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
+summary { cursor: pointer; font-weight: bold; font-size: 0.9rem; }
+.badge { background: #12b76a; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; }
+.settings-panel { position: absolute; top:0; left:0; right:0; bottom:0; background: var(--surface); padding: 30px; display: none; overflow-y: auto; }
+.settings-panel.active { display: block; }
+.setting-group { margin-bottom: 25px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--overlay); display: flex; align-items: center; justify-content: center; z-index: 9999; }
+.modal-overlay.hidden { display: none; }
+.modal-box { background: var(--surface); padding: 25px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+.modal-box h3 { margin-top: 0; }
+.modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: center; }
+@media (max-width: 768px) { .sidebar { width: 80px; } .channel span.name { display: none; } .add-channel { padding: 5px; } }
 </style>
 </head>
 <body>
-<main>
-<div class="header-container">
-  <h1>OGEMTN</h1>
-  <div id="nodeBadge" class="badge"><span class="dot offline"></span>Scanning...</div>
+<header>
+  <div style="font-weight:bold; font-size:1.2rem;">OGEMTN <span id="nodeBadge" class="badge">1 node</span></div>
+</header>
+<div class="app-container">
+  <div class="sidebar">
+    <div class="channel-list" id="channelList"></div>
+    <div class="add-channel">
+      <input type="text" id="newSecret" placeholder="New Secret Group">
+      <button onclick="addGroup()">Add Channel</button>
+    </div>
+  </div>
+  <div class="chat-area">
+    <div class="messages" id="messageFeed"></div>
+    <div class="composer" id="composerBox">
+      <details>
+        <summary>Quick Chat (Disaster Alerts)</summary>
+        <div class="quick-chat">
+          <button class="quick-btn" onclick="sendQuick('🆘 I am trapped inside! Need rescue!')">🆘 Trapped</button>
+          <button class="quick-btn" onclick="sendQuick('🌊 Flood water is rising quickly here!')">🌊 Flood Rising</button>
+          <button class="quick-btn" onclick="sendQuick('🏊 Deep water/Drowning! Need a boat!')">🏊 Need Boat</button>
+          <button class="quick-btn" onclick="sendQuick('🚑 Severe injury! I need urgent medical help!')">🚑 Need Medic</button>
+          <button class="quick-btn" onclick="sendQuick('🔥 Fire nearby, path is blocked!')">🔥 Fire Blocked</button>
+          <button class="quick-btn" onclick="sendQuick('🏃 I am abandoning this location now.')">🏃 Moving out</button>
+          <button class="quick-btn" onclick="sendQuick('🔋 My battery is dying. Last message.')">🔋 Low Battery</button>
+          <button class="quick-btn" onclick="sendQuick('✅ I am safe and have supplies.')">✅ I am safe</button>
+        </div>
+      </details>
+      <form id="msgForm" class="input-row">
+        <input type="text" id="msgText" placeholder="Type message..." required autocomplete="off" maxlength="127">
+        <button type="submit">Send</button>
+      </form>
+    </div>
+    
+    <div class="settings-panel" id="settingsPanel">
+      <h2>Settings</h2>
+      
+      <div class="setting-group">
+        <label><b>Node MAC Address</b></label>
+        <div id="macDisplay" style="margin-top:5px; font-family:monospace; font-size:1.1rem; opacity:0.8;">Waiting for connection...</div>
+      </div>
+
+      <div class="setting-group">
+        <label><b>Display Name</b></label>
+        <input type="text" id="userName" placeholder="e.g. Engr. Smith" onchange="saveSettings()">
+        <small style="display:block; margin-top:5px; opacity:0.7;">This name will be attached to your messages.</small>
+      </div>
+      <div class="setting-group">
+        <label><b>Appearance</b></label>
+        <div style="margin-top:10px;">
+          <button class="quick-btn" onclick="toggleTheme()">Toggle Dark/Light Mode</button>
+        </div>
+      </div>
+      <div class="setting-group">
+        <label><b>Manage Data</b></label>
+        <div style="display:flex; gap:10px; margin-top:10px;">
+          <button class="danger" onclick="clearChannelHistory(activeChannel)">Clear Current Channel</button>
+          <button class="danger" onclick="clearAllHistory()">Clear ALL History</button>
+        </div>
+      </div>
+    </div>
+  </div>
 </div>
-<div class="muted" style="margin-bottom:20px;">Node MAC: <span id="myMac" class="mac-display">Loading...</span></div>
-<p class="muted">Decentralized ESP-NOW messaging. The ESP32 only buffers a few live events in RAM. This browser keeps its own local message history.</p>
-<form id="messageForm">
-<label for="mode">Channel</label>
-<select id="mode" name="type">
-<option value="public">Public broadcast</option>
-<option value="private">Private group</option>
-</select>
-<div id="privateBox" class="hidden">
-<label for="secret">Private group secret</label>
-<input id="secret" name="secret" type="password" maxlength="120" autocomplete="off" placeholder="Enter the shared secret">
-<label class="checkrow"><input id="rememberSecret" type="checkbox" checked> Remember secret in this browser</label>
-<button id="unlockButton" type="button">Unlock private group</button>
-<div id="unlockStatus" class="muted"></div>
+
+<div id="modalOverlay" class="modal-overlay hidden">
+  <div class="modal-box">
+    <h3 id="modalTitle">Title</h3>
+    <p id="modalText">Message</p>
+    <div class="modal-actions">
+      <button id="modalBtnCancel" class="secondary hidden">Cancel</button>
+      <button id="modalBtnOk">OK</button>
+    </div>
+  </div>
 </div>
-<label for="message">Message</label>
-<textarea id="message" name="message" maxlength="127" rows="3" required placeholder="Type a message"></textarea>
-<button type="submit">Send message</button>
-<div id="sendStatus" class="muted" aria-live="polite"></div>
-</form>
-<h2 style="margin-top:30px;">Messages received by this browser</h2>
-<button type="button" class="secondary" id="clearHistory">Clear browser history</button>
-<pre id="liveFeed">No messages saved in this browser yet.</pre>
-</main>
+
 <script>
-const mode=document.getElementById('mode');
-const privateBox=document.getElementById('privateBox');
-const secret=document.getElementById('secret');
-const rememberSecret=document.getElementById('rememberSecret');
-const unlockStatus=document.getElementById('unlockStatus');
-const sendStatus=document.getElementById('sendStatus');
-const feed=document.getElementById('liveFeed');
-const form=document.getElementById('messageForm');
-const nodeBadge=document.getElementById('nodeBadge');
-const macDisplay=document.getElementById('myMac');
-const HISTORY_KEY='ogemtn.messageHistory.v1';
-const MAX_HISTORY=100;
-let cursor=0;
-let polling=false;
-let messageHistory=[];
+const HISTORY_KEY = 'ogemtn.history';
+const GROUPS_KEY = 'ogemtn.groups';
+const SETTINGS_KEY = 'ogemtn.settings';
+const clientId = Math.random().toString(36).substr(2, 9); 
 
-function loadHistory(){
-  try{
-    const saved=JSON.parse(localStorage.getItem(HISTORY_KEY)||'[]');
-    messageHistory=Array.isArray(saved)?saved.filter(x=>x&&typeof x.text==='string'&&typeof x.time==='string').slice(-MAX_HISTORY):[];
-  }catch(e){
-    messageHistory=[];
+let activeChannel = 'public';
+let cursor = 0;
+let isPolling = false;
+
+let groups = JSON.parse(localStorage.getItem(GROUPS_KEY) || '[]');
+let history = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+let settings = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{"theme":"light", "username":""}');
+
+if(settings.theme === 'dark') document.body.classList.add('dark');
+document.getElementById('userName').value = settings.username || '';
+
+if(Notification.permission === 'default') Notification.requestPermission();
+
+function showModal(title, text, isConfirm, callback) {
+  document.getElementById('modalTitle').innerText = title;
+  document.getElementById('modalText').innerText = text;
+  document.getElementById('modalOverlay').classList.remove('hidden');
+  
+  const btnOk = document.getElementById('modalBtnOk');
+  const btnCancel = document.getElementById('modalBtnCancel');
+  
+  btnOk.onclick = () => {
+    document.getElementById('modalOverlay').classList.add('hidden');
+    if(callback) callback(true);
+  };
+  
+  if(isConfirm) {
+    btnCancel.classList.remove('hidden');
+    btnCancel.onclick = () => {
+      document.getElementById('modalOverlay').classList.add('hidden');
+      if(callback) callback(false);
+    };
+  } else {
+    btnCancel.classList.add('hidden');
   }
-  renderHistory();
 }
 
-function saveHistory(){
-  try{
-    localStorage.setItem(HISTORY_KEY,JSON.stringify(messageHistory.slice(-MAX_HISTORY)));
-  }catch(e){}
+function toggleTheme() {
+  document.body.classList.toggle('dark');
+  settings.theme = document.body.classList.contains('dark') ? 'dark' : 'light';
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
 }
 
-function renderHistory(){
-  if(!messageHistory.length){
-    feed.textContent='No messages saved in this browser yet.';
+function saveSettings() {
+  settings.username = document.getElementById('userName').value.trim();
+  localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
+}
+
+function renderChannels() {
+  const list = document.getElementById('channelList');
+  let html = `<div class="channel ${activeChannel==='public'?'active':''}" onclick="setChannel('public')"><span class="name">Public Broadcast</span> 🌐</div>`;
+  groups.forEach(g => {
+    const isActive = activeChannel === g;
+    html += `<div class="channel ${isActive?'active':''}" onclick="setChannel('${g}')">
+      <span class="name">🔒 ${g}</span>
+      <button class="channel-delete" onclick="event.stopPropagation(); removeGroup('${g}')">×</button>
+    </div>`;
+  });
+  html += `<div class="channel ${activeChannel==='settings'?'active':''}" onclick="setChannel('settings')" style="margin-top:20px; border-top:1px solid var(--border); border-radius:0;"><span class="name">⚙️ Settings</span></div>`;
+  list.innerHTML = html;
+}
+
+function setChannel(ch) {
+  activeChannel = ch;
+  renderChannels();
+  
+  if (ch === 'settings') {
+    document.getElementById('messageFeed').style.display = 'none';
+    document.getElementById('composerBox').style.display = 'none';
+    document.getElementById('settingsPanel').classList.add('active');
+  } else {
+    document.getElementById('settingsPanel').classList.remove('active');
+    document.getElementById('messageFeed').style.display = 'flex';
+    document.getElementById('composerBox').style.display = 'block';
+    renderMessages();
+  }
+}
+
+function addGroup() {
+  const val = document.getElementById('newSecret').value.trim();
+  if(val && !groups.includes(val)) {
+    groups.push(val);
+    localStorage.setItem(GROUPS_KEY, JSON.stringify(groups));
+    document.getElementById('newSecret').value = '';
+    setChannel(val);
+  }
+}
+
+function removeGroup(ch) {
+  showModal('Delete Channel', `Are you sure you want to delete the channel "${ch}"?`, true, (confirmed) => {
+    if(confirmed) {
+      groups = groups.filter(g => g !== ch);
+      localStorage.setItem(GROUPS_KEY, JSON.stringify(groups));
+      if(activeChannel === ch) setChannel('public');
+      else renderChannels();
+    }
+  });
+}
+
+function clearChannelHistory(ch) {
+  if (ch === 'settings') return;
+  showModal('Clear History', `Clear all saved messages for ${ch}?`, true, (confirmed) => {
+    if(confirmed) {
+      history = history.filter(m => m.channel !== ch);
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      showModal('Success', 'Channel history cleared.', false);
+      renderMessages();
+    }
+  });
+}
+
+function clearAllHistory() {
+  showModal('Clear All', 'Delete ALL messages across all channels on this device?', true, (confirmed) => {
+    if(confirmed) {
+      history = [];
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+      showModal('Success', 'All history cleared.', false);
+    }
+  });
+}
+
+function renderMessages() {
+  if(activeChannel === 'settings') return;
+  const feed = document.getElementById('messageFeed');
+  const filtered = history.filter(m => m.channel === activeChannel);
+  feed.innerHTML = filtered.map(m => `
+    <div class="msg ${m.isSelf ? 'self' : ''}">
+      <div style="font-weight:bold; font-size:0.8rem; margin-bottom:4px;">${m.senderName}</div>
+      <div>${m.text}</div>
+      <div class="msg-time">${m.time}</div>
+    </div>
+  `).join('');
+  feed.scrollTop = feed.scrollHeight;
+}
+
+function pushMessage(channel, text, senderId, senderName, isSelf) {
+  history.push({ 
+    id: Date.now()+Math.random(), 
+    channel, 
+    text, 
+    senderId,
+    senderName, 
+    isSelf, 
+    time: new Date().toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'}) 
+  });
+  if(history.length > 300) history = history.slice(-300);
+  localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  
+  if(!isSelf && Notification.permission === 'granted') {
+    new Notification("OGEMTN Alert", { body: `${senderName}: ${text}` });
+  }
+  if(channel === activeChannel) renderMessages();
+}
+
+async function sendQuick(txt) {
+  document.getElementById('msgText').value = txt;
+  document.getElementById('msgForm').dispatchEvent(new Event('submit'));
+}
+
+document.getElementById('msgForm').onsubmit = async (e) => {
+  e.preventDefault();
+  const input = document.getElementById('msgText');
+  let text = input.value.trim();
+  if(!text) return;
+  
+  const myName = settings.username || 'Anonymous';
+  const payloadText = settings.username ? `${settings.username}: ${text}` : text;
+  
+  if (payloadText.length > 127) {
+    showModal("Limit Reached", "Message too long with username attached.", false);
     return;
   }
-  feed.textContent=messageHistory.map(item=>'['+item.time+'] '+item.text).join('\n');
-}
 
-function addBrowserMessage(text){
-  messageHistory.push({time:new Date().toLocaleString(),text:String(text)});
-  if(messageHistory.length>MAX_HISTORY) messageHistory=messageHistory.slice(-MAX_HISTORY);
-  saveHistory();
-  renderHistory();
-}
-
-function updatePrivateBox(){
-  privateBox.classList.toggle('hidden',mode.value!=='private');
-  try{localStorage.setItem('ogemtn.mode',mode.value);}catch(e){}
-}
-
-function saveSecret(){
-  try{
-    if(rememberSecret.checked){
-      if(secret.value) localStorage.setItem('ogemtn.secret',secret.value);
-      else localStorage.removeItem('ogemtn.secret');
-      localStorage.setItem('ogemtn.rememberSecret','1');
-    }else{
-      localStorage.removeItem('ogemtn.secret');
-      localStorage.setItem('ogemtn.rememberSecret','0');
+  const type = activeChannel === 'public' ? 'public' : 'private';
+  const body = new URLSearchParams({ 
+    type, 
+    message: payloadText,
+    clientId: clientId 
+  });
+  if(type === 'private') body.set('secret', activeChannel);
+  
+  try {
+    const res = await fetch('/send', { method: 'POST', body });
+    if(res.ok) {
+      input.value = '';
+      pushMessage(activeChannel, text, clientId, myName + " (Me)", true);
+    } else {
+      showModal('Send Failed', await res.text(), false);
     }
-  }catch(e){}
-}
-
-async function unlockPrivate(){
-  if(!secret.value){
-    unlockStatus.textContent='Enter a private group secret first.';
-    return false;
+  } catch(err) { 
+    showModal('Network Error', 'Could not reach the mesh node.', false); 
   }
-  saveSecret();
-  try{
-    const body=new URLSearchParams({secret:secret.value});
-    const response=await fetch('/unlock',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
-    unlockStatus.textContent=await response.text();
-    return response.ok;
-  }catch(e){
-    unlockStatus.textContent='Could not unlock private group.';
-    return false;
-  }
-}
+};
 
-try{
-  mode.value=localStorage.getItem('ogemtn.mode')||'public';
-  const remember=localStorage.getItem('ogemtn.rememberSecret')!=='0';
-  rememberSecret.checked=remember;
-  secret.value=remember?localStorage.getItem('ogemtn.secret')||'':'';
-}catch(e){
-  mode.value='public';
-  rememberSecret.checked=false;
-}
-updatePrivateBox();
-loadHistory();
+async function poll() {
+  if(isPolling) return;
+  isPolling = true;
+  try {
+    const res = await fetch('/events?cursor=' + cursor);
+    const data = await res.json();
+    cursor = Math.max(cursor, data.cursor || 0);
+    
+    if(data.mac) {
+      document.getElementById('macDisplay').innerText = data.mac;
+    }
 
-mode.addEventListener('change',updatePrivateBox);
-secret.addEventListener('input',saveSecret);
-rememberSecret.addEventListener('change',saveSecret);
-document.getElementById('unlockButton').addEventListener('click',unlockPrivate);
-document.getElementById('clearHistory').addEventListener('click',function(){
-  messageHistory=[];
-  try{localStorage.removeItem(HISTORY_KEY);}catch(e){}
-  renderHistory();
-});
+    if(data.nodes !== undefined) {
+      const isAlone = data.nodes <= 1;
+      document.getElementById('nodeBadge').innerHTML = `<span class="dot ${isAlone ? 'offline' : ''}"></span> ${data.nodes} node(s)`;
+    }
+    
+    if(data.events) {
+      data.events.forEach(ev => {
+        if(ev.sender !== clientId) {
+          const ch = ev.type === 'public' ? 'public' : ev.group;
+          
+          let displayName = ev.sender; 
+          let msgBody = ev.text;
+          const colonIdx = ev.text.indexOf(': ');
+          if (colonIdx > 0 && colonIdx < 30) {
+            displayName = ev.text.substring(0, colonIdx);
+            msgBody = ev.text.substring(colonIdx + 2);
+          }
 
-form.addEventListener('submit',async function(e){
-  e.preventDefault();
-  sendStatus.textContent='';
-  const message=document.getElementById('message').value.trim();
-  if(!message){sendStatus.textContent='Enter a message first.';return;}
-  if(mode.value==='private'){
-    if(!secret.value){unlockStatus.textContent='Enter a private group secret first.';return;}
-    saveSecret();
-  }
-  const body=new URLSearchParams({type:mode.value,message});
-  if(mode.value==='private') body.set('secret',secret.value);
-  try{
-    const response=await fetch('/send',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:body.toString()});
-    sendStatus.textContent=await response.text();
-    if(response.ok) document.getElementById('message').value='';
-  }catch(e){
-    sendStatus.textContent='Send failed.';
-  }
-});
-
-async function pollLive(){
-  if(polling)return;
-  polling=true;
-  try{
-    const r=await fetch('/events?cursor='+encodeURIComponent(cursor),{cache:'no-store'});
-    if(r.ok){
-      const data=await r.json();
-      const latest=Number(data.cursor);
-      if(Number.isFinite(latest)) cursor=latest;
-      
-      if(data.mac) macDisplay.textContent = data.mac;
-      
-      if(data.nodes !== undefined) {
-        const isAlone = data.nodes <= 1;
-        nodeBadge.innerHTML = '<span class="dot ' + (isAlone ? 'offline' : '') + '"></span>' + data.nodes + ' node' + (data.nodes === 1 ? '' : 's');
-      }
-
-      if(Array.isArray(data.events)){
-        for(const item of data.events){
-          if(item&&typeof item.text==='string') addBrowserMessage(item.text);
+          pushMessage(ch, msgBody, ev.sender, displayName, false);
         }
-      }
+      });
     }
-  }catch(e){}
-  polling=false;
+  } catch(e) {}
+  isPolling = false;
 }
 
-async function start(){
-  if(secret.value&&mode.value==='private') await unlockPrivate();
-  try{
-    const r=await fetch('/cursor',{cache:'no-store'});
-    cursor=Number(await r.text())||0;
-  }catch(e){}
-  setInterval(pollLive,800);
-}
-start();
+renderChannels();
+setInterval(poll, 1000);
 </script>
 </body>
 </html>
 )html";
+
+void safeDelay(uint32_t ms) {
+  uint32_t start = millis();
+  while (millis() - start < ms) {
+    yield();
+  }
+}
+
+void fatalError(const char* msg) {
+  Serial.println(msg);
+  safeDelay(3000); 
+  ESP.restart(); 
+}
 
 String macString(const uint8_t *mac) {
   char value[18];
@@ -324,6 +493,25 @@ String jsonEscape(const char *input) {
   return out;
 }
 
+bool checkRateLimit(uint32_t ip) {
+  uint32_t now = millis();
+  for (int i = 0; i < 8; i++) {
+    if (clientLimits[i].ip == ip) {
+      if (now - clientLimits[i].lastPost < 1500) return true;
+      clientLimits[i].lastPost = now;
+      return false;
+    }
+  }
+  for (int i = 0; i < 8; i++) {
+    if (clientLimits[i].ip == 0 || now - clientLimits[i].lastPost > 10000) {
+      clientLimits[i].ip = ip;
+      clientLimits[i].lastPost = now;
+      return false;
+    }
+  }
+  return false;
+}
+
 void clearLiveEvents() {
   for (size_t i = 0; i < LIVE_EVENT_COUNT; i++) {
     liveEvents[i].valid = false;
@@ -333,11 +521,14 @@ void clearLiveEvents() {
   liveIndex = 0;
 }
 
-void publishLive(const String &text) {
+void publishLive(const String &text, const String &type, const String &group, const String &senderId) {
   if (WiFi.softAPgetStationNum() == 0) return;
   LiveEvent &event = liveEvents[liveIndex];
   event.id = ++liveEventId;
   text.toCharArray(event.text, sizeof(event.text));
+  type.toCharArray(event.type, sizeof(event.type));
+  group.toCharArray(event.group, sizeof(event.group));
+  senderId.toCharArray(event.sender, sizeof(event.sender));
   event.valid = true;
   liveIndex = (liveIndex + 1) % LIVE_EVENT_COUNT;
 }
@@ -361,12 +552,12 @@ void updateNodePresence(const uint8_t *mac) {
 }
 
 uint32_t getActiveNodesCount() {
-  uint32_t count = 1; // Always include self
+  uint32_t count = 1;
   uint32_t now = millis();
   for (size_t i = 0; i < MAX_NODES; i++) {
     if (meshNodes[i].lastSeen != 0) {
       if (now - meshNodes[i].lastSeen > 90000) {
-        meshNodes[i].lastSeen = 0; // Expire stale node
+        meshNodes[i].lastSeen = 0;
       } else {
         count++;
       }
@@ -494,7 +685,6 @@ void processPacket(MeshPacket &packet) {
   if (isDuplicate(packet)) return;
   rememberPacket(packet);
 
-  // Update presence regardless of message type
   updateNodePresence(packet.origin);
 
   String origin = macString(packet.origin);
@@ -502,13 +692,12 @@ void processPacket(MeshPacket &packet) {
     char message[128] = {};
     memcpy(message, packet.payload, packet.length);
     message[packet.length] = '\0';
-    publishLive("[PUBLIC] " + origin + ": " + String(message));
+    publishLive(String(message), "public", "", origin);
   } else if (packet.type == PRIVATE_MESSAGE) {
     uint8_t plaintext[128] = {};
     if (decryptPrivate(packet, plaintext)) {
       plaintext[packet.length] = '\0';
-      publishLive("[PRIVATE] " + origin + ": " + String((char *)plaintext));
-      memset(plaintext, 0, sizeof(plaintext));
+      publishLive(String((char *)plaintext), "private", activeChannelId ? "unlocked" : "", origin);
     }
   }
 
@@ -518,7 +707,6 @@ void processPacket(MeshPacket &packet) {
   }
 }
 
-// Cross-core compatibility for ESP32 v2.x and v3.x callback signatures
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 void receiveCallback(const esp_now_recv_info_t *info, const uint8_t *data, int length) {
 #else
@@ -530,31 +718,36 @@ void receiveCallback(const uint8_t *macAddr, const uint8_t *data, int length) {
   xQueueSend(rxQueue, &packet, 0);
 }
 
-void handleHome() {
-  server.send_P(200, "text/html; charset=utf-8", PAGE);
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+void sendCallback(const uint8_t *macAddr, esp_now_send_status_t status) {
+#else
+void sendCallback(const uint8_t *macAddr, uint8_t status) {
+#endif
+  if (status == 0) {
+    
+  } else {
+    Serial.printf("ESP-NOW TX Error: %d\n", status);
+  }
 }
 
-void handleCursor() {
-  server.send(200, "text/plain", String(liveEventId));
+void handleHome() {
+  server.send_P(200, "text/html; charset=utf-8", PAGE);
 }
 
 void handleEvents() {
   uint32_t cursor = (uint32_t)server.arg("cursor").toInt();
   uint32_t first = liveEventId > LIVE_EVENT_COUNT ? liveEventId - LIVE_EVENT_COUNT + 1 : 1;
   if (cursor + 1 > first) first = cursor + 1;
-  
+
   uint32_t nodeCount = getActiveNodesCount();
-  // Include the node MAC in the JSON payload
   String json = "{\"cursor\":" + String(liveEventId) + ",\"mac\":\"" + macString(nodeMac) + "\",\"nodes\":" + String(nodeCount) + ",\"events\":[";
-  
+
   bool firstItem = true;
   for (uint32_t id = first; id <= liveEventId; id++) {
     for (size_t i = 0; i < LIVE_EVENT_COUNT; i++) {
       if (!liveEvents[i].valid || liveEvents[i].id != id) continue;
       if (!firstItem) json += ",";
-      json += "{\"id\":" + String(liveEvents[i].id) + ",\"text\":\"";
-      json += jsonEscape(liveEvents[i].text);
-      json += "\"}";
+      json += "{\"id\":" + String(liveEvents[i].id) + ",\"text\":\"" + jsonEscape(liveEvents[i].text) + "\",\"type\":\"" + jsonEscape(liveEvents[i].type) + "\",\"group\":\"" + jsonEscape(liveEvents[i].group) + "\",\"sender\":\"" + jsonEscape(liveEvents[i].sender) + "\"}";
       firstItem = false;
       break;
     }
@@ -563,23 +756,17 @@ void handleEvents() {
   server.send(200, "application/json; charset=utf-8", json);
 }
 
-void handleUnlock() {
-  String secret = server.arg("secret");
-  if (secret.length() == 0) {
-    server.send(400, "text/plain", "Enter a private group secret.");
-    return;
-  }
-  if (!unlockKey(secret)) {
-    server.send(500, "text/plain", "Could not derive private key.");
-    return;
-  }
-  server.send(200, "text/plain", "Private group unlocked in RAM.");
-}
-
 void handleSend() {
+  uint32_t clientIP = (uint32_t)server.client().remoteIP();
+  if (checkRateLimit(clientIP)) {
+    server.send(429, "text/plain", "Rate limit: 1 message per 1.5 seconds.");
+    return;
+  }
+
   String message = server.arg("message");
   String type = server.arg("type");
   String secret = server.arg("secret");
+  String clientId = server.arg("clientId"); 
   message.trim();
 
   if (message.length() == 0 || message.length() > MAX_TEXT) {
@@ -610,49 +797,47 @@ void handleSend() {
       server.send(500, "text/plain", "Encryption failed.");
       return;
     }
-    unlockKey(secret); // Re-lock active key using secret
-    publishLive("[PRIVATE SENT] " + message);
-  } else {
-    publishLive("[PUBLIC SENT] " + macString(nodeMac) + ": " + message);
+    unlockKey(secret); 
   }
+
+  publishLive(message, type, secret, clientId);
 
   rememberPacket(packet);
   if (!broadcastPacket(packet)) {
     server.send(500, "text/plain", "ESP-NOW broadcast request failed.");
     return;
   }
-  
-  lastHeartbeatTx = millis(); // Reset heartbeat timer since we just transmitted
+
+  lastHeartbeatTx = millis();
   server.send(200, "text/plain", "Message sent.");
 }
 
 void setup() {
   Serial.begin(115200);
-  delay(200);
+  safeDelay(200); 
+  
   memset(seenCache, 0, sizeof(seenCache));
   memset(meshNodes, 0, sizeof(meshNodes));
+  memset(clientLimits, 0, sizeof(clientLimits));
   clearLiveEvents();
   txSequence = esp_random();
 
   WiFi.mode(WIFI_AP_STA);
   WiFi.setSleep(false);
-  WiFi.setTxPower(WIFI_POWER_8_5dBm);
-
+  
   if (esp_wifi_get_mac(WIFI_IF_STA, nodeMac) != ESP_OK) {
-    Serial.println("Could not read ESP-NOW MAC.");
-    while (true) delay(1000);
+    fatalError("Could not read ESP-NOW MAC. Restarting...");
   }
 
   String ssid = "ESP_NOW_" + macString(nodeMac);
-  if (!WiFi.softAP(ssid.c_str(), nullptr, WIFI_CHANNEL, false, 4)) {
-    Serial.println("Access point startup failed.");
-    while (true) delay(1000);
+  
+  if (!WiFi.softAP(ssid.c_str(), nullptr, WIFI_CHANNEL, false, 8)) {
+    fatalError("Access point startup failed. Restarting...");
   }
   WiFi.setTxPower(WIFI_POWER_8_5dBm);
 
   if (esp_now_init() != ESP_OK) {
-    Serial.println("ESP-NOW initialization failed.");
-    while (true) delay(1000);
+    fatalError("ESP-NOW initialization failed. Restarting...");
   }
 
   esp_now_peer_info_t peer = {};
@@ -660,44 +845,25 @@ void setup() {
   peer.channel = WIFI_CHANNEL;
   peer.ifidx = WIFI_IF_STA;
   peer.encrypt = false;
-  esp_err_t peerResult = esp_now_add_peer(&peer);
-  if (peerResult != ESP_OK && peerResult != ESP_ERR_ESPNOW_EXIST) {
-    Serial.printf("Broadcast peer registration failed: %d\n", (int)peerResult);
-    while (true) delay(1000);
-  }
+  esp_now_add_peer(&peer);
 
   rxQueue = xQueueCreate(RX_QUEUE_DEPTH, sizeof(MeshPacket));
-  if (rxQueue == nullptr) {
-    Serial.println("Receive queue creation failed.");
-    while (true) delay(1000);
-  }
 
-// Core compatibility hook
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-  if (esp_now_register_recv_cb(receiveCallback) != ESP_OK) {
+  esp_now_register_recv_cb(receiveCallback);
+  esp_now_register_send_cb(sendCallback);
 #else
-  if (esp_now_register_recv_cb((esp_now_recv_cb_t)receiveCallback) != ESP_OK) {
+  esp_now_register_recv_cb((esp_now_recv_cb_t)receiveCallback);
+  esp_now_register_send_cb((esp_now_send_cb_t)sendCallback);
 #endif
-    Serial.println("Receive callback registration failed.");
-    while (true) delay(1000);
-  }
 
   server.on("/", HTTP_GET, handleHome);
-  server.on("/cursor", HTTP_GET, handleCursor);
   server.on("/events", HTTP_GET, handleEvents);
-  server.on("/unlock", HTTP_POST, handleUnlock);
   server.on("/send", HTTP_POST, handleSend);
-  server.onNotFound([]() {
-    server.send(404, "text/plain", "Not found.");
-  });
+  server.onNotFound([]() { server.send(404, "text/plain", "Not found."); });
   server.begin();
 
-  Serial.println();
   Serial.println("OGEMTN started.");
-  Serial.printf("SSID: %s\n", ssid.c_str());
-  Serial.printf("ESP-NOW MAC: %s\n", macString(nodeMac).c_str());
-  Serial.printf("Web address: http://%s\n", WiFi.softAPIP().toString().c_str());
-  Serial.printf("Wi-Fi channel: %u\n", WIFI_CHANNEL);
 }
 
 void loop() {
@@ -709,13 +875,11 @@ void loop() {
   }
   previousClientCount = clients;
 
-  // Process incoming queue
   MeshPacket packet;
   while (xQueueReceive(rxQueue, &packet, 0) == pdTRUE) {
     processPacket(packet);
   }
 
-  // Automatic Presence Heartbeat (every 30 seconds)
   uint32_t now = millis();
   if (now - lastHeartbeatTx > 30000) {
     lastHeartbeatTx = now;
@@ -727,10 +891,10 @@ void loop() {
     hb.length = 0;
     memcpy(hb.origin, nodeMac, sizeof(nodeMac));
     hb.sequence = ++txSequence;
-    
+
     rememberPacket(hb);
     broadcastPacket(hb);
   }
 
-  delay(1);
+  yield();
 }
