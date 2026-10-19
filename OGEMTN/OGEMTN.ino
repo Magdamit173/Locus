@@ -202,86 +202,112 @@ const char PAGE[] PROGMEM = R"html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=0,interactive-widget=resizes-content">
-<title>OGEMTN</title>
+<title>OGEMTN Mesh</title>
 <style>
 :root { --bg: #f2f5fa; --surface: #ffffff; --text: #182230; --border: #e2e8f0; --primary: #175cd3; --msg-bg: #f1f5f9; --my-msg: #dbeafe; --danger: #ef4444; --overlay: rgba(0,0,0,0.4); }
 body.dark { --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --border: #334155; --primary: #3b82f6; --msg-bg: #334155; --my-msg: #1e3a8a; --danger: #dc2626; --overlay: rgba(0,0,0,0.7); }
-html, body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--text); height: 100%; width: 100%; position: fixed; overflow: hidden; overscroll-behavior: none; }
-header { background: var(--surface); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); z-index: 101; flex-shrink: 0; height: 50px; box-sizing: border-box; }
-#menuToggle, #infoToggle { background: none; border: none; font-size: 1.4rem; color: var(--text); cursor: pointer; padding: 0 10px; line-height: 1; width: auto; margin: 0; }
+html, body { font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--text); height: 100%; width: 100%; position: fixed; overflow: hidden; overscroll-behavior: none; }
+
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border); border-radius: 4px; }
+::-webkit-scrollbar-thumb:hover { background: var(--primary); }
+* { scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+
+header { background: var(--surface); padding: 0 16px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); z-index: 101; flex-shrink: 0; height: 50px; box-sizing: border-box; }
+#menuToggle, #infoToggle { background: none; border: none; font-size: 1.3rem; color: var(--text); cursor: pointer; padding: 6px 10px; border-radius: 6px; line-height: 1; width: auto; margin: 0; transition: background 0.2s; }
+#menuToggle:hover, #infoToggle:hover { background: var(--bg); }
 #menuToggle { display: none; }
+
 .app-container { display: flex; height: calc(100% - 50px); overflow: hidden; position: relative; width: 100%; }
 .sidebar { width: 280px; min-width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 200; height: 100%; }
-.sidebar-right { position: absolute; right: -300px; top: 0; bottom: 0; width: 300px; background: var(--surface); border-left: 1px solid var(--border); transition: right 0.3s ease; z-index: 250; padding: 15px; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; gap: 15px; }
-.sidebar-right.open { right: 0; box-shadow: -2px 0 10px rgba(0,0,0,0.3); }
+
+.sidebar-right { position: absolute; right: -320px; top: 0; bottom: 0; width: 320px; background: var(--surface); border-left: 1px solid var(--border); transition: right 0.3s cubic-bezier(0.4, 0, 0.2, 1); z-index: 250; padding: 18px; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; gap: 16px; }
+.sidebar-right.open { right: 0; box-shadow: -4px 0 20px rgba(0,0,0,0.15); }
+
 .channel-list { flex: 1; overflow-y: auto; padding: 10px; }
-.channel { padding: 12px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; font-weight: 500; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.channel { padding: 12px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; font-weight: 500; display: flex; align-items: center; justify-content: space-between; gap: 10px; transition: background 0.15s; }
 .channel:hover { background: var(--bg); }
 .channel.active { background: var(--primary); color: white; }
-.channel-delete { background: var(--danger); color: white; border: none; cursor: pointer; font-size: 1.2rem; width: 26px; height: 26px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 0; margin: 0 0 0 auto; transition: opacity 0.2s; }
-.channel-delete:hover { opacity: 0.8; }
+.channel-delete { background: var(--danger); color: white; border: none; cursor: pointer; font-size: 1rem; width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; padding: 0; line-height: 0; margin: 0 0 0 auto; transition: opacity 0.2s; }
+.channel-delete:hover { opacity: 0.85; }
+
 .add-channel { padding: 15px; border-top: 1px solid var(--border); }
-input, button, select { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 5px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 1rem; outline: none; }
+input, button, select { width: 100%; box-sizing: border-box; padding: 10px; margin-top: 5px; border-radius: 6px; border: 1px solid var(--border); background: var(--surface); color: var(--text); font-size: 0.95rem; outline: none; }
 input:focus { border-color: var(--primary); }
-button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: bold; }
+button { background: var(--primary); color: white; border: none; cursor: pointer; font-weight: bold; transition: opacity 0.2s; }
+button:hover { opacity: 0.9; }
 button.danger { background: var(--danger); }
 button.secondary { background: var(--border); color: var(--text); }
 .hidden { display: none !important; }
+
 .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; overflow: hidden; min-width: 0; height: 100%; }
-.messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-.msg { padding: 10px 14px; border-radius: 12px; max-width: 80%; background: var(--msg-bg); align-self: flex-start; word-wrap: break-word; overflow-wrap: anywhere; position: relative; group: relative; }
+.messages { flex: 1; padding: 16px 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+
+.msg { padding: 10px 14px; border-radius: 12px; max-width: 80%; background: var(--msg-bg); align-self: flex-start; word-wrap: break-word; overflow-wrap: anywhere; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 .msg.self { background: var(--my-msg); align-self: flex-end; }
 .msg-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
-.msg-sender { font-weight: bold; font-size: 0.8rem; }
-.msg-reply-btn { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 0.75rem; padding: 0 4px; margin: 0; width: auto; opacity: 0.8; }
+.msg-sender { font-weight: 700; font-size: 0.8rem; opacity: 0.9; }
+.msg-reply-btn { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 0.75rem; padding: 0; margin: 0; width: auto; opacity: 0.75; font-weight: bold; }
 .msg-reply-btn:hover { opacity: 1; text-decoration: underline; }
 .msg-quote { background: rgba(0,0,0,0.06); border-left: 3px solid var(--primary); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 6px; opacity: 0.9; }
 body.dark .msg-quote { background: rgba(255,255,255,0.08); }
-.msg-time { font-size: 0.75rem; opacity: 0.7; margin-top: 4px; text-align: right; }
-.composer { background: var(--surface); padding: 15px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.msg-time { font-size: 0.72rem; opacity: 0.65; margin-top: 4px; text-align: right; }
+
+.composer { background: var(--surface); padding: 12px 15px; border-top: 1px solid var(--border); flex-shrink: 0; }
 .reply-preview { display: flex; justify-content: space-between; align-items: center; background: var(--msg-bg); border-left: 3px solid var(--primary); padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 8px; }
-.reply-cancel { background: none; border: none; color: var(--danger); font-size: 1.1rem; cursor: pointer; padding: 0 5px; width: auto; margin: 0; line-height: 1; }
-.quick-chat { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; padding: 5px 0; }
-.quick-btn { width: auto; white-space: nowrap; padding: 6px 12px; font-size: 0.85rem; background: var(--border); color: var(--text); border-radius: 20px; }
-.input-row { display: flex; gap: 10px; }
+.reply-cancel { background: none; border: none; color: var(--danger); font-size: 1.1rem; cursor: pointer; padding: 0 4px; width: auto; margin: 0; line-height: 1; }
+
+.quick-chat { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; padding: 4px 0; }
+.quick-btn { width: auto; white-space: nowrap; padding: 5px 10px; font-size: 0.8rem; background: var(--border); color: var(--text); border-radius: 16px; font-weight: normal; }
+.input-row { display: flex; gap: 8px; }
 .input-row input { margin: 0; }
-.input-row button { margin: 0; width: 80px; }
-details { margin-bottom: 10px; background: var(--bg); padding: 10px; border-radius: 8px; border: 1px solid var(--border); }
-summary { cursor: pointer; font-weight: bold; font-size: 0.9rem; padding: 5px 0; }
-.badge { background: #12b76a; color: white; padding: 4px 8px; border-radius: 12px; font-size: 0.8rem; }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ffffff; margin-right: 4px; }
+.input-row button { margin: 0; width: 80px; flex-shrink: 0; }
+
+details { margin-bottom: 8px; background: var(--bg); padding: 8px 12px; border-radius: 8px; border: 1px solid var(--border); }
+summary { cursor: pointer; font-weight: bold; font-size: 0.85rem; padding: 2px 0; user-select: none; }
+
+.badge { background: #12b76a; color: white; padding: 3px 8px; border-radius: 12px; font-size: 0.75rem; font-weight: 600; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #ffffff; margin-right: 5px; }
 .dot.offline { background: #fca5a5; }
-.unread { background: #ef4444; color: white; border-radius: 10px; padding: 1px 7px; font-size: 0.75rem; font-weight: bold; }
-.pdot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; background: #9ca3af; flex-shrink: 0; }
+.unread { background: #ef4444; color: white; border-radius: 10px; padding: 1px 6px; font-size: 0.72rem; font-weight: bold; }
+.pdot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; background: #9ca3af; flex-shrink: 0; }
 .pdot.on { background: #12b76a; box-shadow: 0 0 6px #12b76a; }
 .pdot.off { background: #ef4444; }
 .pcount { font-size: 0.75rem; opacity: 0.85; margin-left: auto; }
-#presenceBar { padding: 6px 14px; font-size: 0.85rem; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
+
+#presenceBar { padding: 6px 14px; font-size: 0.82rem; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
 #presenceBar.warn { background: #fee2e2; color: #991b1b; }
 body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
-.settings-panel { position: absolute; top:0; left:0; right:0; bottom:0; background: var(--surface); padding: 30px; display: none; overflow-y: auto; z-index: 10; }
+
+.settings-panel { position: absolute; top:0; left:0; right:0; bottom:0; background: var(--surface); padding: 24px; display: none; overflow-y: auto; z-index: 10; }
 .settings-panel.active { display: block; }
-.setting-group { margin-bottom: 25px; padding-bottom: 20px; border-bottom: 1px solid var(--border); }
+.setting-group { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+
 .bat-bar { display: flex; gap: 3px; margin-top: 8px; }
-.bat-seg { flex: 1; height: 18px; border-radius: 3px; background: var(--border); }
+.bat-seg { flex: 1; height: 16px; border-radius: 3px; background: var(--border); }
 .bat-seg.on { background: #12b76a; }
 .bat-seg.on.mid { background: #f79009; }
 .bat-seg.on.low { background: #ef4444; }
-.node-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px 10px; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); }
-.node-name { font-weight: bold; font-family: monospace; }
-.node-sig { text-align: right; font-size: 0.85rem; white-space: nowrap; }
-.sig-good { color: #12b76a; }
-.sig-fair { color: #f79009; }
-.sig-weak { color: #ef4444; }
+
+.card-box { border: 1px solid var(--border); border-radius: 8px; padding: 10px; background: var(--bg); margin-top: 6px; }
+.node-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 8px; margin-top: 6px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); }
+.node-name { font-weight: bold; font-family: monospace; font-size: 0.88rem; }
+.node-sig { text-align: right; font-size: 0.82rem; white-space: nowrap; }
+.sig-good { color: #12b76a; font-weight: bold; }
+.sig-fair { color: #f79009; font-weight: bold; }
+.sig-weak { color: #ef4444; font-weight: bold; }
+
 .modal-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: var(--overlay); display: flex; align-items: center; justify-content: center; z-index: 9999; }
-.modal-box { background: var(--surface); padding: 25px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
-.modal-box h3 { margin-top: 0; }
-.modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: center; }
+.modal-box { background: var(--surface); padding: 22px; border-radius: 12px; width: 90%; max-width: 340px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
+.modal-box h3 { margin-top: 0; font-size: 1.1rem; }
+.modal-actions { display: flex; gap: 10px; margin-top: 18px; justify-content: center; }
+
 @media (max-width: 768px) {
   #menuToggle { display: block; }
-  .sidebar { position: absolute; left: -280px; top: 0; bottom: 0; transition: left 0.3s ease; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 999; }
+  .sidebar { position: absolute; left: -280px; top: 0; bottom: 0; transition: left 0.3s ease; box-shadow: 2px 0 10px rgba(0,0,0,0.3); z-index: 999; }
   .sidebar.open { left: 0; }
-  .msg { max-width: 92%; }
+  .msg { max-width: 90%; }
   .composer { padding: 10px; }
 }
 </style>
@@ -290,10 +316,11 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
 <header>
   <div style="display:flex; align-items:center;">
     <button id="menuToggle">☰</button>
-    <div style="font-weight:bold; font-size:1.2rem;">OGEMTN <span id="nodeBadge" class="badge">1 node</span></div>
+    <div style="font-weight:bold; font-size:1.15rem; margin-left:4px;">OGEMTN <span id="nodeBadge" class="badge">1 node</span></div>
   </div>
-  <button id="infoToggle" title="Channel Info & Network Nodes">👥</button>
+  <button id="infoToggle" title="Network & Device Status">📶 Info</button>
 </header>
+
 <div class="app-container">
   <div class="sidebar">
     <div class="channel-list" id="channelList"></div>
@@ -302,25 +329,34 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
       <button id="addGroupBtn">Add Channel</button>
     </div>
   </div>
-  
+
   <div class="sidebar-right" id="rightDrawer">
-    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:10px;">
-      <h3 style="margin:0;">Channel & Mesh Info</h3>
-      <button id="closeDrawerBtn" style="width:auto; padding:2px 8px; background:none; color:var(--text); font-size:1.2rem;">×</button>
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:8px;">
+      <h3 style="margin:0; font-size:1rem;">Network Inspector</h3>
+      <button id="closeDrawerBtn" style="width:auto; padding:0 6px; background:none; color:var(--text); font-size:1.2rem;">×</button>
     </div>
+
     <div>
-      <label style="font-size:0.85rem; opacity:0.7; font-weight:bold;">CURRENT CHANNEL</label>
-      <div id="drawerChannelName" style="font-weight:bold; font-size:1.1rem; margin-top:4px;">Public Broadcast</div>
-      <div id="drawerChannelStatus" style="font-size:0.85rem; margin-top:2px;">🌐 Unencrypted Mesh</div>
+      <label style="font-size:0.75rem; opacity:0.7; font-weight:bold; letter-spacing:0.5px;">LAYER 3 · PHONE TO NODE LINK</label>
+      <div class="card-box">
+        <div style="font-size:0.85rem; opacity:0.8;">Local AP Direct Signal:</div>
+        <div id="drawerL3Signal" style="font-size:1rem; margin-top:3px;">Measuring...</div>
+      </div>
     </div>
+
     <div>
-      <label style="font-size:0.85rem; opacity:0.7; font-weight:bold;">ACTIVE LISTENERS</label>
-      <div id="drawerListeners" style="font-size:1rem; margin-top:4px;">Checking...</div>
+      <label style="font-size:0.75rem; opacity:0.7; font-weight:bold; letter-spacing:0.5px;">CURRENT CHANNEL</label>
+      <div class="card-box">
+        <div id="drawerChannelName" style="font-weight:bold; font-size:0.95rem;">Public Broadcast</div>
+        <div id="drawerChannelStatus" style="font-size:0.8rem; opacity:0.8; margin-top:2px;">🌐 Unencrypted Mesh</div>
+        <div id="drawerListeners" style="font-size:0.8rem; margin-top:6px; font-weight:600;">Checking active devices...</div>
+      </div>
     </div>
-    <div style="border-top:1px solid var(--border); padding-top:10px;">
-      <label style="font-size:0.85rem; opacity:0.7; font-weight:bold;">MESH NODES & PEERS</label>
-      <div id="drawerNodeList" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
-        <small>Listening for nearby nodes...</small>
+
+    <div style="flex:1; display:flex; flex-direction:column; min-height:0;">
+      <label style="font-size:0.75rem; opacity:0.7; font-weight:bold; letter-spacing:0.5px;">LAYER 2 · ESP-NOW MESH NODES</label>
+      <div id="drawerNodeList" style="margin-top:6px; overflow-y:auto; flex:1; display:flex; flex-direction:column; gap:4px;">
+        <small style="opacity:0.7;">Scanning RF environment...</small>
       </div>
     </div>
   </div>
@@ -330,25 +366,25 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
     <div class="messages" id="messageFeed"></div>
     <div class="composer" id="composerBox">
       <div id="replyBar" class="reply-preview hidden">
-        <div>
+        <div style="overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">
           <span style="font-weight:bold;" id="replyTargetSender"></span>: 
-          <span id="replyTargetText" style="opacity:0.8;"></span>
+          <span id="replyTargetText" style="opacity:0.85;"></span>
         </div>
         <button class="reply-cancel" id="cancelReplyBtn">×</button>
       </div>
       <details>
-        <summary>Quick Emergency Alerts</summary>
+        <summary>Emergency Quick Alerts</summary>
         <div class="quick-chat" id="quickChat">
           <button class="quick-btn" data-q="🆘 SOS: Trapped & Need Rescue!">🆘 Trapped & Rescue</button>
           <button class="quick-btn" data-q="🚑 Medical: Severe Injury / Medic Needed!">🚑 Medic Needed</button>
-          <button class="quick-btn" data-q="🌊 Hazard: Rising Water / Flood Danger!">🌊 Rising Flood</button>
-          <button class="quick-btn" data-q="🔥 Hazard: Fire Nearby / Path Blocked!">🔥 Fire Blocked</button>
-          <button class="quick-btn" data-q="💧 Resource: Requesting Water & Food!">💧 Water/Food Needed</button>
+          <button class="quick-btn" data-q="🌊 Danger: Fast Rising Flood Water!">🌊 Rising Flood</button>
+          <button class="quick-btn" data-q="🔥 Danger: Fire Nearby / Route Blocked!">🔥 Fire Blocked</button>
+          <button class="quick-btn" data-q="💧 Request: Need Clean Water & Supplies!">💧 Need Water/Food</button>
           <button class="quick-btn" data-q="📍 Status: Holding Position / Waiting Here">📍 Holding Position</button>
-          <button class="quick-btn" data-q="🏃 Status: Relocating to Higher Ground">🏃 Relocating</button>
-          <button class="quick-btn" data-q="🔋 Battery: Critical Power (<5%)">🔋 Critical Battery</button>
-          <button class="quick-btn" data-q="✅ Status: Safe & Accounted For">✅ Safe & Accounted</button>
-          <button class="quick-btn" data-q="👀 Net: Monitoring Emergency Frequency">👀 Monitoring Net</button>
+          <button class="quick-btn" data-q="🏃 Status: Moving to High Ground">🏃 Moving High</button>
+          <button class="quick-btn" data-q="🔋 Power: Critical Battery Level (<5%)">🔋 Critical Power</button>
+          <button class="quick-btn" data-q="✅ Status: Safe & Fully Accounted For">✅ Safe & Accounted</button>
+          <button class="quick-btn" data-q="👀 Net: Monitoring Channel Activity">👀 Monitoring Net</button>
         </div>
       </details>
       <form id="msgForm" class="input-row">
@@ -358,53 +394,50 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
     </div>
 
     <div class="settings-panel" id="settingsPanel">
-      <h2>Settings</h2>
+      <h2 style="margin-top:0;">Node Settings</h2>
       <div class="setting-group">
         <label><b>Node MAC Address</b></label>
-        <div id="macDisplay" style="margin-top:5px; font-family:monospace; font-size:1.1rem; opacity:0.8;">Waiting for connection...</div>
+        <div id="macDisplay" style="margin-top:5px; font-family:monospace; font-size:1rem; opacity:0.8;">Waiting...</div>
       </div>
       <div class="setting-group">
-        <label><b>Your Signal</b></label>
-        <div id="mySignal" style="margin-top:5px; font-size:1.05rem;">Checking...</div>
-        <small style="display:block; margin-top:5px; opacity:0.7;">Signal strength between your phone and this node.</small>
+        <label><b>Client Link Signal (Phone to Node)</b></label>
+        <div id="mySignal" style="margin-top:5px; font-size:0.95rem;">Checking...</div>
       </div>
       <div class="setting-group">
-        <label><b>Battery</b></label>
-        <div id="batText" style="margin-top:5px; font-size:1.05rem;">Checking...</div>
+        <label><b>Node Battery</b></label>
+        <div id="batText" style="margin-top:5px; font-size:0.95rem;">Checking...</div>
         <div id="batBar" class="bat-bar"></div>
-        <small id="batVolt" style="display:block; margin-top:5px; opacity:0.7;"></small>
+        <small id="batVolt" style="display:block; margin-top:4px; opacity:0.7;"></small>
       </div>
       <div class="setting-group">
-        <label><b>Nearby Nodes <span id="nodeTotal"></span></b></label>
-        <div id="nodeSummary" style="margin-top:5px; opacity:0.8; font-size:0.9rem;">Listening...</div>
-        <div id="nodeList"></div>
-        <button id="moreNodesBtn" class="secondary hidden">Show more</button>
+        <label><b>Discovered Mesh Nodes <span id="nodeTotal"></span></b></label>
+        <div id="nodeSummary" style="margin-top:4px; opacity:0.8; font-size:0.85rem;">Listening...</div>
+        <div id="nodeList" style="margin-top:6px;"></div>
+        <button id="moreNodesBtn" class="secondary hidden" style="margin-top:8px;">Show more</button>
       </div>
       <div class="setting-group">
         <label><b>Display Name</b></label>
-        <input type="text" id="userName" placeholder="e.g. Engr. Smith" maxlength="24">
-        <small style="display:block; margin-top:5px; opacity:0.7;">This name will be attached to your messages.</small>
+        <input type="text" id="userName" placeholder="e.g. Rescuer 1" maxlength="24">
       </div>
       <div class="setting-group">
-        <label><b>Block Annoying Users</b></label>
-        <div style="display:flex; gap:10px; margin-top:5px;">
-          <input type="text" id="blockInput" placeholder="Exact Display Name or ID">
-          <button id="blockBtn" style="width:80px;" class="danger">Block</button>
+        <label><b>Block Users</b></label>
+        <div style="display:flex; gap:8px; margin-top:5px;">
+          <input type="text" id="blockInput" placeholder="Name or ID">
+          <button id="blockBtn" style="width:75px;" class="danger">Block</button>
         </div>
-        <small style="display:block; margin-top:5px; opacity:0.7;">Messages from these names will be silently ignored on your screen.</small>
-        <div id="blockList" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:5px;"></div>
+        <div id="blockList" style="margin-top:8px; display:flex; flex-wrap:wrap; gap:5px;"></div>
       </div>
       <div class="setting-group">
-        <label><b>Appearance</b></label>
-        <div style="margin-top:10px;">
-          <button class="quick-btn" id="themeBtn">Toggle Dark/Light Mode</button>
-          <button class="quick-btn" id="soundBtn" style="margin-left:8px;">Alerts: On</button>
+        <label><b>Appearance & Alerts</b></label>
+        <div style="margin-top:8px; display:flex; gap:8px;">
+          <button class="quick-btn" id="themeBtn">Toggle Dark/Light</button>
+          <button class="quick-btn" id="soundBtn">Alerts: On</button>
         </div>
       </div>
       <div class="setting-group">
-        <label><b>Manage Data</b></label>
-        <div style="display:flex; gap:10px; margin-top:10px;">
-          <button class="danger" id="clearBtn">Clear ALL Device History</button>
+        <label><b>Storage</b></label>
+        <div style="margin-top:8px;">
+          <button class="danger" id="clearBtn">Clear Device History</button>
         </div>
       </div>
     </div>
@@ -414,7 +447,7 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
 <div id="modalOverlay" class="modal-overlay hidden">
   <div class="modal-box">
     <h3 id="modalTitle">Title</h3>
-    <p id="modalText">Message</p>
+    <p id="modalText" style="font-size:0.9rem; opacity:0.85;"></p>
     <div class="modal-actions">
       <button id="modalBtnCancel" class="secondary hidden">Cancel</button>
       <button id="modalBtnOk">OK</button>
@@ -534,7 +567,7 @@ function badge(ch) {
 
 function updateTitle() {
   const n = Object.values(unread).reduce((a, b) => a + b, 0);
-  document.title = n > 0 ? `(${n}) OGEMTN` : 'OGEMTN';
+  document.title = n > 0 ? `(${n}) OGEMTN` : 'OGEMTN Mesh';
 }
 
 function notify(channel, name, text, silent) {
@@ -617,7 +650,10 @@ $('menuToggle').onclick = (e) => {
 $('infoToggle').onclick = (e) => {
   e.stopPropagation();
   $('rightDrawer').classList.toggle('open');
-  if ($('rightDrawer').classList.contains('open')) updateDrawer();
+  if ($('rightDrawer').classList.contains('open')) {
+    updateDrawer();
+    pollNodes();
+  }
 };
 
 $('closeDrawerBtn').onclick = () => {
@@ -677,9 +713,9 @@ function updatePresenceBar() {
   bar.classList.remove('hidden');
   const n = presence[activeChannel];
   bar.classList.toggle('warn', n === 0);
-  if (n === undefined) bar.innerHTML = '<span class="pdot"></span>Checking who\'s online...';
-  else if (n === 0) bar.innerHTML = '<span class="pdot off"></span>Nobody else online here. Your message may not be heard yet.';
-  else bar.innerHTML = `<span class="pdot on"></span>${n} other${n > 1 ? 's' : ''} listening on this channel`;
+  if (n === undefined) bar.innerHTML = '<span class="pdot"></span>Checking channel presence...';
+  else if (n === 0) bar.innerHTML = '<span class="pdot off"></span>No other active listeners detected on channel.';
+  else bar.innerHTML = `<span class="pdot on"></span>${n} other node listener${n > 1 ? 's' : ''} online`;
   updateDrawer();
 }
 
@@ -694,14 +730,14 @@ function setPresence(ch, total) {
 function updateDrawer() {
   if (!$('rightDrawer').classList.contains('open')) return;
   if (activeChannel === 'settings') {
-    $('drawerChannelName').innerText = 'Settings Panel';
-    $('drawerChannelStatus').innerText = '⚙️ System Configuration';
+    $('drawerChannelName').innerText = 'System Settings';
+    $('drawerChannelStatus').innerText = '⚙️ Hardware Config';
     $('drawerListeners').innerText = 'N/A';
   } else {
     $('drawerChannelName').innerText = activeChannel === 'public' ? 'Public Broadcast' : '🔒 ' + activeChannel;
-    $('drawerChannelStatus').innerText = activeChannel === 'public' ? '🌐 Unencrypted Mesh' : '🔐 AES-256 Encrypted';
+    $('drawerChannelStatus').innerText = activeChannel === 'public' ? '🌐 Unencrypted Mesh' : '🔐 AES-256 GCM Encrypted';
     const n = presence[activeChannel];
-    $('drawerListeners').innerText = n === undefined ? 'Checking...' : `${n + 1} device(s) total (${n} remote)`;
+    $('drawerListeners').innerText = n === undefined ? 'Checking presence...' : `${n + 1} device(s) total (${n} remote listeners)`;
   }
 }
 
@@ -777,13 +813,13 @@ $('addGroupBtn').onclick = async () => {
     return;
   }
   if (val === 'public' || val === 'settings') {
-    showModal('Reserved', 'Please choose a different secret.', false);
+    showModal('Reserved', 'Please choose a different secret name.', false);
     return;
   }
   if (groups.includes(val)) return;
   const ok = await joinGroup(val);
   if (!ok) {
-    showModal('Cannot Join', 'The node could not register this group. It may be full or unreachable.', false);
+    showModal('Cannot Join', 'Node capacity reached or communication failed.', false);
     return;
   }
   groups.push(val);
@@ -793,7 +829,7 @@ $('addGroupBtn').onclick = async () => {
 };
 
 function removeGroup(ch) {
-  showModal('Purge Channel', `Are you sure you want to purge and leave the secret channel "${ch}"? Saved messages for this channel will be removed from your device.`, true, (confirmed) => {
+  showModal('Purge Channel', `Purge secret channel "${ch}" and clear stored messages on this device?`, true, (confirmed) => {
     if (confirmed) {
       groups = groups.filter((g) => g !== ch);
       store.set(GROUPS_KEY, groups);
@@ -807,18 +843,17 @@ function removeGroup(ch) {
 }
 
 $('clearBtn').onclick = () => {
-  showModal('Clear All', 'Delete ALL messages across all channels on this device?', true, (confirmed) => {
+  showModal('Clear History', 'Delete ALL message history saved locally on this phone?', true, (confirmed) => {
     if (confirmed) {
       chatLog = [];
       store.set(HISTORY_KEY, chatLog);
       renderMessages();
-      showModal('Success', 'All history cleared.', false);
     }
   });
 };
 
 function setReply(sender, text) {
-  activeReply = { sender, text: text.length > 20 ? text.substring(0,20) + '...' : text };
+  activeReply = { sender, text: text.length > 25 ? text.substring(0, 25) + '...' : text };
   $('replyTargetSender').innerText = esc(sender);
   $('replyTargetText').innerText = esc(activeReply.text);
   $('replyBar').classList.remove('hidden');
@@ -899,7 +934,7 @@ async function sendText(raw, fromInput) {
   const payloadText = `${myName}: ${text}`;
 
   if (byteLen(payloadText) > 127) {
-    showModal('Limit Reached', 'Message too long with quote attachment.', false);
+    showModal('Limit Reached', 'Message too long. Try shortening your display name or response.', false);
     return;
   }
 
@@ -921,7 +956,7 @@ async function sendText(raw, fromInput) {
       showModal('Send Failed', await res.text(), false);
     }
   } catch (err) {
-    showModal('Network Error', 'Could not reach the mesh node.', false);
+    showModal('Network Error', 'Target mesh node unreachable.', false);
   }
   sending = false;
 }
@@ -942,16 +977,16 @@ function renderBattery(b) {
   let text = 'Checking...';
   let volt = '';
   if (!b || b.s === 'off') {
-    text = 'Battery sensing is disabled in firmware.';
+    text = 'Battery sense disabled in firmware.';
   } else if (b.s === 'none') {
-    text = 'No battery detected on the sense pin.';
+    text = 'No battery detected on sense pin.';
   } else if (b.s === 'pin') {
-    text = 'Invalid ADC pin. Use an ADC1 pin.';
+    text = 'Invalid ADC pin specified.';
   } else if (b.s === 'ok') {
     on = Math.round(b.pct / 10);
     cls = b.pct <= 20 ? 'low' : (b.pct <= 40 ? 'mid' : '');
-    text = `${b.pct}%${b.pct <= 10 ? ' · Low battery' : ''}`;
-    volt = `Cell voltage: ${Number(b.v).toFixed(2)} V`;
+    text = `${b.pct}%${b.pct <= 10 ? ' · Low Battery' : ''}`;
+    volt = `Voltage: ${Number(b.v).toFixed(2)} V`;
   }
   $('batText').innerText = text;
   $('batVolt').innerText = volt;
@@ -978,21 +1013,26 @@ async function pollNodes() {
   try {
     const res = await timedFetch('/nodes?limit=' + nodeLimit, {}, 4000);
     const d = await res.json();
-    $('mySignal').innerHTML = (d.myRssi === null || d.myRssi === undefined) ? 'Unavailable' : sigHtml(d.myRssi);
+    
+    const l3Sig = (d.myRssi === null || d.myRssi === undefined) ? 'Unavailable' : sigHtml(d.myRssi);
+    $('mySignal').innerHTML = l3Sig;
+    $('drawerL3Signal').innerHTML = l3Sig;
+
     renderBattery(d.bat);
     $('nodeTotal').innerText = `(${d.total}${d.full ? '+' : ''})`;
-    let summary = `${d.direct} direct · ${d.total - d.direct} via relay`;
-    if (d.shown < d.total) summary += ` · showing ${d.shown} of ${d.total}`;
-    $('nodeSummary').innerText = d.total === 0 ? 'No other nodes heard yet.' : summary;
     
-    const nodeRowsHtml = d.nodes.map((n) => {
+    let summary = `${d.direct} direct · ${d.total - d.direct} relayed`;
+    if (d.shown < d.total) summary += ` · showing ${d.shown} of ${d.total}`;
+    $('nodeSummary').innerText = d.total === 0 ? 'No other mesh nodes heard.' : summary;
+    
+    const nodeRowsHtml = d.nodes.length ? d.nodes.map((n) => {
       const where = n.h <= 1 ? 'Direct' : `${n.h} hops`;
-      const sig = n.r === null ? `<small>${n.h <= 1 ? 'signal n/a' : 'via relay'}</small>` : sigHtml(n.r);
-      return `<div class="node-row"><div><div class="node-name">${esc(n.n)}</div><small>${where} · ${Number(n.a)}s ago</small></div><div class="node-sig">${sig}</div></div>`;
-    }).join('');
+      const sig = n.r === null ? `<small style="opacity:0.6">${n.h <= 1 ? 'N/A' : 'Relayed'}</small>` : sigHtml(n.r);
+      return `<div class="node-row"><div><div class="node-name">${esc(n.n)}</div><small style="opacity:0.75">${where} · ${Number(n.a)}s ago</small></div><div class="node-sig">${sig}</div></div>`;
+    }).join('') : '<small style="opacity:0.75">No remote nodes heard yet.</small>';
     
     $('nodeList').innerHTML = nodeRowsHtml;
-    $('drawerNodeList').innerHTML = d.nodes.length ? nodeRowsHtml : '<small>No other nodes in radio range.</small>';
+    $('drawerNodeList').innerHTML = nodeRowsHtml;
     $('moreNodesBtn').classList.toggle('hidden', d.shown >= d.total);
   } catch (e) {}
   nodesBusy = false;
