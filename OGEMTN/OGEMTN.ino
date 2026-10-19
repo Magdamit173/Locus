@@ -21,9 +21,9 @@
 #include <string.h>
 
 #if defined(CONFIG_FREERTOS_UNICORE) || defined(CONFIG_IDF_TARGET_ESP32C3)
-  #define OGEMTN_SINGLE_CORE 1
+#define OGEMTN_SINGLE_CORE 1
 #else
-  #define OGEMTN_SINGLE_CORE 0
+#define OGEMTN_SINGLE_CORE 0
 #endif
 
 const uint8_t WIFI_CHANNEL = 1;
@@ -38,19 +38,20 @@ const size_t MAX_NODES = 64;
 const size_t MAX_GROUPS = 12;
 const size_t MAX_PENDING_ACKS = 8;
 
-// ---- Presence ("who's listening") ----
 const size_t MAX_GROUP_PEERS = 96;
 const size_t MAX_LISTENERS = 24;
-const uint32_t PEER_TTL_MS = 90000;        // remote node/group info expires after this
-const uint32_t LISTENER_TTL_MS = 30000;    // a phone must re-/join within this to count
-const uint32_t GROUP_PRESENCE_EVERY_MS = 5000; // one group announced per tick (round robin)
+const uint32_t PEER_TTL_MS = 90000;
+const uint32_t LISTENER_TTL_MS = 30000;
+const uint32_t GROUP_PRESENCE_EVERY_MS = 5000;
 
 const bool BATTERY_SENSE_ENABLED = true;
+
 #if defined(CONFIG_IDF_TARGET_ESP32C3)
 const int BATTERY_PIN = 3;
 #else
 const int BATTERY_PIN = 34;
 #endif
+
 const float DIVIDER_R_TOP_OHM = 100000.0f;
 const float DIVIDER_R_BOTTOM_OHM = 100000.0f;
 const float BATTERY_CAL_FACTOR = 1.0f;
@@ -132,7 +133,7 @@ struct ActiveNode {
   int8_t rssi;
   bool hasRssi;
   uint8_t hops;
-  uint8_t phones;   // phones connected to that node (from its heartbeat)
+  uint8_t phones;
 };
 
 struct RateLimit {
@@ -155,7 +156,6 @@ struct PendingAck {
   bool valid;
 };
 
-// Remote node announcing N phones listening on a secret channel
 struct GroupPeer {
   uint8_t mac[6];
   uint8_t channelId[8];
@@ -163,7 +163,6 @@ struct GroupPeer {
   uint32_t lastSeen;
 };
 
-// A local phone that recently called /join for a channel (keepalive)
 struct LocalListener {
   uint8_t channelId[8];
   uint32_t ip;
@@ -209,9 +208,12 @@ const char PAGE[] PROGMEM = R"html(
 body.dark { --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --border: #334155; --primary: #3b82f6; --msg-bg: #334155; --my-msg: #1e3a8a; --danger: #dc2626; --overlay: rgba(0,0,0,0.7); }
 html, body { font-family: system-ui, Arial, sans-serif; margin: 0; padding: 0; background: var(--bg); color: var(--text); height: 100%; width: 100%; position: fixed; overflow: hidden; overscroll-behavior: none; }
 header { background: var(--surface); padding: 12px 20px; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); z-index: 101; flex-shrink: 0; height: 50px; box-sizing: border-box; }
-#menuToggle { display: none; background: none; border: none; font-size: 1.5rem; color: var(--text); cursor: pointer; padding: 0 15px 0 0; line-height: 1; width: auto; margin: 0; }
+#menuToggle, #infoToggle { background: none; border: none; font-size: 1.4rem; color: var(--text); cursor: pointer; padding: 0 10px; line-height: 1; width: auto; margin: 0; }
+#menuToggle { display: none; }
 .app-container { display: flex; height: calc(100% - 50px); overflow: hidden; position: relative; width: 100%; }
 .sidebar { width: 280px; min-width: 280px; background: var(--surface); border-right: 1px solid var(--border); display: flex; flex-direction: column; z-index: 200; height: 100%; }
+.sidebar-right { position: absolute; right: -300px; top: 0; bottom: 0; width: 300px; background: var(--surface); border-left: 1px solid var(--border); transition: right 0.3s ease; z-index: 250; padding: 15px; overflow-y: auto; box-sizing: border-box; display: flex; flex-direction: column; gap: 15px; }
+.sidebar-right.open { right: 0; box-shadow: -2px 0 10px rgba(0,0,0,0.3); }
 .channel-list { flex: 1; overflow-y: auto; padding: 10px; }
 .channel { padding: 12px; border-radius: 8px; cursor: pointer; margin-bottom: 5px; font-weight: 500; display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .channel:hover { background: var(--bg); }
@@ -227,10 +229,18 @@ button.secondary { background: var(--border); color: var(--text); }
 .hidden { display: none !important; }
 .chat-area { flex: 1; display: flex; flex-direction: column; background: var(--bg); position: relative; overflow: hidden; min-width: 0; height: 100%; }
 .messages { flex: 1; padding: 20px; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
-.msg { padding: 10px 14px; border-radius: 12px; max-width: 80%; background: var(--msg-bg); align-self: flex-start; word-wrap: break-word; overflow-wrap: anywhere; }
+.msg { padding: 10px 14px; border-radius: 12px; max-width: 80%; background: var(--msg-bg); align-self: flex-start; word-wrap: break-word; overflow-wrap: anywhere; position: relative; group: relative; }
 .msg.self { background: var(--my-msg); align-self: flex-end; }
+.msg-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
+.msg-sender { font-weight: bold; font-size: 0.8rem; }
+.msg-reply-btn { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 0.75rem; padding: 0 4px; margin: 0; width: auto; opacity: 0.8; }
+.msg-reply-btn:hover { opacity: 1; text-decoration: underline; }
+.msg-quote { background: rgba(0,0,0,0.06); border-left: 3px solid var(--primary); padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; margin-bottom: 6px; opacity: 0.9; }
+body.dark .msg-quote { background: rgba(255,255,255,0.08); }
 .msg-time { font-size: 0.75rem; opacity: 0.7; margin-top: 4px; text-align: right; }
 .composer { background: var(--surface); padding: 15px; border-top: 1px solid var(--border); flex-shrink: 0; }
+.reply-preview { display: flex; justify-content: space-between; align-items: center; background: var(--msg-bg); border-left: 3px solid var(--primary); padding: 6px 10px; border-radius: 6px; font-size: 0.85rem; margin-bottom: 8px; }
+.reply-cancel { background: none; border: none; color: var(--danger); font-size: 1.1rem; cursor: pointer; padding: 0 5px; width: auto; margin: 0; line-height: 1; }
 .quick-chat { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; padding: 5px 0; }
 .quick-btn { width: auto; white-space: nowrap; padding: 6px 12px; font-size: 0.85rem; background: var(--border); color: var(--text); border-radius: 20px; }
 .input-row { display: flex; gap: 10px; }
@@ -267,7 +277,6 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
 .modal-box { background: var(--surface); padding: 25px; border-radius: 12px; width: 90%; max-width: 350px; text-align: center; box-shadow: 0 10px 25px rgba(0,0,0,0.2); }
 .modal-box h3 { margin-top: 0; }
 .modal-actions { display: flex; gap: 10px; margin-top: 20px; justify-content: center; }
-
 @media (max-width: 768px) {
   #menuToggle { display: block; }
   .sidebar { position: absolute; left: -280px; top: 0; bottom: 0; transition: left 0.3s ease; box-shadow: 2px 0 10px rgba(0,0,0,0.5); z-index: 999; }
@@ -283,6 +292,7 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
     <button id="menuToggle">☰</button>
     <div style="font-weight:bold; font-size:1.2rem;">OGEMTN <span id="nodeBadge" class="badge">1 node</span></div>
   </div>
+  <button id="infoToggle" title="Channel Info & Network Nodes">👥</button>
 </header>
 <div class="app-container">
   <div class="sidebar">
@@ -292,21 +302,53 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
       <button id="addGroupBtn">Add Channel</button>
     </div>
   </div>
+  
+  <div class="sidebar-right" id="rightDrawer">
+    <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:10px;">
+      <h3 style="margin:0;">Channel & Mesh Info</h3>
+      <button id="closeDrawerBtn" style="width:auto; padding:2px 8px; background:none; color:var(--text); font-size:1.2rem;">×</button>
+    </div>
+    <div>
+      <label style="font-size:0.85rem; opacity:0.7; font-weight:bold;">CURRENT CHANNEL</label>
+      <div id="drawerChannelName" style="font-weight:bold; font-size:1.1rem; margin-top:4px;">Public Broadcast</div>
+      <div id="drawerChannelStatus" style="font-size:0.85rem; margin-top:2px;">🌐 Unencrypted Mesh</div>
+    </div>
+    <div>
+      <label style="font-size:0.85rem; opacity:0.7; font-weight:bold;">ACTIVE LISTENERS</label>
+      <div id="drawerListeners" style="font-size:1rem; margin-top:4px;">Checking...</div>
+    </div>
+    <div style="border-top:1px solid var(--border); padding-top:10px;">
+      <label style="font-size:0.85rem; opacity:0.7; font-weight:bold;">MESH NODES & PEERS</label>
+      <div id="drawerNodeList" style="margin-top:8px; display:flex; flex-direction:column; gap:6px;">
+        <small>Listening for nearby nodes...</small>
+      </div>
+    </div>
+  </div>
+
   <div class="chat-area">
     <div id="presenceBar">Checking who's online...</div>
     <div class="messages" id="messageFeed"></div>
     <div class="composer" id="composerBox">
+      <div id="replyBar" class="reply-preview hidden">
+        <div>
+          <span style="font-weight:bold;" id="replyTargetSender"></span>: 
+          <span id="replyTargetText" style="opacity:0.8;"></span>
+        </div>
+        <button class="reply-cancel" id="cancelReplyBtn">×</button>
+      </div>
       <details>
-        <summary>Quick Chat (Disaster Alerts)</summary>
+        <summary>Quick Emergency Alerts</summary>
         <div class="quick-chat" id="quickChat">
-          <button class="quick-btn" data-q="🆘 I am trapped inside! Need rescue!">🆘 Trapped</button>
-          <button class="quick-btn" data-q="🌊 Flood water is rising quickly here!">🌊 Flood Rising</button>
-          <button class="quick-btn" data-q="🏊 Deep water/Drowning! Need a boat!">🏊 Need Boat</button>
-          <button class="quick-btn" data-q="🚑 Severe injury! I need urgent medical help!">🚑 Need Medic</button>
-          <button class="quick-btn" data-q="🔥 Fire nearby, path is blocked!">🔥 Fire Blocked</button>
-          <button class="quick-btn" data-q="🏃 I am abandoning this location now.">🏃 Moving out</button>
-          <button class="quick-btn" data-q="🔋 My battery is dying. Last message.">🔋 Low Battery</button>
-          <button class="quick-btn" data-q="✅ I am safe and have supplies.">✅ I am safe</button>
+          <button class="quick-btn" data-q="🆘 SOS: Trapped & Need Rescue!">🆘 Trapped & Rescue</button>
+          <button class="quick-btn" data-q="🚑 Medical: Severe Injury / Medic Needed!">🚑 Medic Needed</button>
+          <button class="quick-btn" data-q="🌊 Hazard: Rising Water / Flood Danger!">🌊 Rising Flood</button>
+          <button class="quick-btn" data-q="🔥 Hazard: Fire Nearby / Path Blocked!">🔥 Fire Blocked</button>
+          <button class="quick-btn" data-q="💧 Resource: Requesting Water & Food!">💧 Water/Food Needed</button>
+          <button class="quick-btn" data-q="📍 Status: Holding Position / Waiting Here">📍 Holding Position</button>
+          <button class="quick-btn" data-q="🏃 Status: Relocating to Higher Ground">🏃 Relocating</button>
+          <button class="quick-btn" data-q="🔋 Battery: Critical Power (<5%)">🔋 Critical Battery</button>
+          <button class="quick-btn" data-q="✅ Status: Safe & Accounted For">✅ Safe & Accounted</button>
+          <button class="quick-btn" data-q="👀 Net: Monitoring Emergency Frequency">👀 Monitoring Net</button>
         </div>
       </details>
       <form id="msgForm" class="input-row">
@@ -317,38 +359,32 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
 
     <div class="settings-panel" id="settingsPanel">
       <h2>Settings</h2>
-
       <div class="setting-group">
         <label><b>Node MAC Address</b></label>
         <div id="macDisplay" style="margin-top:5px; font-family:monospace; font-size:1.1rem; opacity:0.8;">Waiting for connection...</div>
       </div>
-
       <div class="setting-group">
         <label><b>Your Signal</b></label>
         <div id="mySignal" style="margin-top:5px; font-size:1.05rem;">Checking...</div>
         <small style="display:block; margin-top:5px; opacity:0.7;">Signal strength between your phone and this node.</small>
       </div>
-
       <div class="setting-group">
         <label><b>Battery</b></label>
         <div id="batText" style="margin-top:5px; font-size:1.05rem;">Checking...</div>
         <div id="batBar" class="bat-bar"></div>
         <small id="batVolt" style="display:block; margin-top:5px; opacity:0.7;"></small>
       </div>
-
       <div class="setting-group">
         <label><b>Nearby Nodes <span id="nodeTotal"></span></b></label>
         <div id="nodeSummary" style="margin-top:5px; opacity:0.8; font-size:0.9rem;">Listening...</div>
         <div id="nodeList"></div>
         <button id="moreNodesBtn" class="secondary hidden">Show more</button>
       </div>
-
       <div class="setting-group">
         <label><b>Display Name</b></label>
         <input type="text" id="userName" placeholder="e.g. Engr. Smith" maxlength="24">
         <small style="display:block; margin-top:5px; opacity:0.7;">This name will be attached to your messages.</small>
       </div>
-
       <div class="setting-group">
         <label><b>Block Annoying Users</b></label>
         <div style="display:flex; gap:10px; margin-top:5px;">
@@ -358,7 +394,6 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
         <small style="display:block; margin-top:5px; opacity:0.7;">Messages from these names will be silently ignored on your screen.</small>
         <div id="blockList" style="margin-top:10px; display:flex; flex-wrap:wrap; gap:5px;"></div>
       </div>
-
       <div class="setting-group">
         <label><b>Appearance</b></label>
         <div style="margin-top:10px;">
@@ -440,9 +475,11 @@ let ackVer = 0;
 let firstPoll = true;
 let nodeLimit = 20;
 let nodesBusy = false;
+let activeReply = null;
+
 const deliveredKeys = new Set();
 const unread = {};
-const presence = {};   // channel -> number of OTHER phones listening (undefined = unknown)
+const presence = {};
 
 let groups = store.get(GROUPS_KEY, []);
 let chatLog = store.get(HISTORY_KEY, []);
@@ -577,8 +614,19 @@ $('menuToggle').onclick = (e) => {
   document.querySelector('.sidebar').classList.toggle('open');
 };
 
+$('infoToggle').onclick = (e) => {
+  e.stopPropagation();
+  $('rightDrawer').classList.toggle('open');
+  if ($('rightDrawer').classList.contains('open')) updateDrawer();
+};
+
+$('closeDrawerBtn').onclick = () => {
+  $('rightDrawer').classList.remove('open');
+};
+
 $('messageFeed').onclick = () => {
   document.querySelector('.sidebar').classList.remove('open');
+  $('rightDrawer').classList.remove('open');
 };
 
 $('themeBtn').onclick = () => {
@@ -632,14 +680,29 @@ function updatePresenceBar() {
   if (n === undefined) bar.innerHTML = '<span class="pdot"></span>Checking who\'s online...';
   else if (n === 0) bar.innerHTML = '<span class="pdot off"></span>Nobody else online here. Your message may not be heard yet.';
   else bar.innerHTML = `<span class="pdot on"></span>${n} other${n > 1 ? 's' : ''} listening on this channel`;
+  updateDrawer();
 }
 
 function setPresence(ch, total) {
-  const v = Math.max(0, total - 1);  // minus me
+  const v = Math.max(0, total - 1);
   const changed = presence[ch] !== v;
   presence[ch] = v;
   if (changed) renderChannels();
   updatePresenceBar();
+}
+
+function updateDrawer() {
+  if (!$('rightDrawer').classList.contains('open')) return;
+  if (activeChannel === 'settings') {
+    $('drawerChannelName').innerText = 'Settings Panel';
+    $('drawerChannelStatus').innerText = '⚙️ System Configuration';
+    $('drawerListeners').innerText = 'N/A';
+  } else {
+    $('drawerChannelName').innerText = activeChannel === 'public' ? 'Public Broadcast' : '🔒 ' + activeChannel;
+    $('drawerChannelStatus').innerText = activeChannel === 'public' ? '🌐 Unencrypted Mesh' : '🔐 AES-256 Encrypted';
+    const n = presence[activeChannel];
+    $('drawerListeners').innerText = n === undefined ? 'Checking...' : `${n + 1} device(s) total (${n} remote)`;
+  }
 }
 
 function renderChannels() {
@@ -670,6 +733,7 @@ $('channelList').onclick = (e) => {
 function setChannel(ch) {
   activeChannel = ch;
   unread[ch] = 0;
+  clearReply();
   updateTitle();
   renderChannels();
   document.querySelector('.sidebar').classList.remove('open');
@@ -753,17 +817,51 @@ $('clearBtn').onclick = () => {
   });
 };
 
+function setReply(sender, text) {
+  activeReply = { sender, text: text.length > 20 ? text.substring(0,20) + '...' : text };
+  $('replyTargetSender').innerText = esc(sender);
+  $('replyTargetText').innerText = esc(activeReply.text);
+  $('replyBar').classList.remove('hidden');
+  $('msgText').focus();
+}
+
+function clearReply() {
+  activeReply = null;
+  $('replyBar').classList.add('hidden');
+}
+
+$('cancelReplyBtn').onclick = clearReply;
+
 function renderMessages() {
   if (activeChannel === 'settings') return;
   const feed = $('messageFeed');
   const filtered = chatLog.filter((m) => m.channel === activeChannel);
-  feed.innerHTML = filtered.map((m) => `
-    <div class="msg ${m.isSelf ? 'self' : ''}">
-      <div style="font-weight:bold; font-size:0.8rem; margin-bottom:4px;">${esc(m.senderName)}</div>
-      <div>${esc(m.text)}</div>
-      <div class="msg-time">${esc(m.time)}${m.isSelf ? (m.delivered ? ' · ✓✓ Delivered' : ' · ✓ Sent') : ''}</div>
-    </div>
-  `).join('');
+  feed.innerHTML = filtered.map((m) => {
+    let quoteHtml = '';
+    let msgText = m.text;
+    if (msgText.startsWith('↳ [') && msgText.includes(']: ')) {
+      const idx = msgText.indexOf(']: ');
+      const qSender = msgText.substring(3, idx);
+      const rest = msgText.substring(idx + 3);
+      const spaceIdx = rest.indexOf(' ');
+      if (spaceIdx > 0) {
+        const qText = rest.substring(0, spaceIdx);
+        msgText = rest.substring(spaceIdx + 1);
+        quoteHtml = `<div class="msg-quote"><b>${esc(qSender)}</b>: ${esc(qText)}</div>`;
+      }
+    }
+    return `
+      <div class="msg ${m.isSelf ? 'self' : ''}">
+        <div class="msg-header">
+          <span class="msg-sender">${esc(m.senderName)}</span>
+          <button class="msg-reply-btn" onclick="setReply('${esc(m.senderName)}', '${esc(msgText)}')">↩ reply</button>
+        </div>
+        ${quoteHtml}
+        <div>${esc(msgText)}</div>
+        <div class="msg-time">${esc(m.time)}${m.isSelf ? (m.delivered ? ' · ✓✓ Delivered' : ' · ✓ Sent') : ''}</div>
+      </div>
+    `;
+  }).join('');
   feed.scrollTop = feed.scrollHeight;
 }
 
@@ -790,14 +888,18 @@ function pushMessage(channel, text, senderId, senderName, isSelf, eventKey, sile
 
 async function sendText(raw, fromInput) {
   if (sending) return;
-  const text = raw.trim();
+  let text = raw.trim();
   if (!text) return;
+
+  if (activeReply) {
+    text = `↳ [${activeReply.sender}]: ${activeReply.text} ${text}`;
+  }
 
   const myName = settings.username || 'Anon';
   const payloadText = `${myName}: ${text}`;
 
   if (byteLen(payloadText) > 127) {
-    showModal('Limit Reached', 'Message too long with username attached.', false);
+    showModal('Limit Reached', 'Message too long with quote attachment.', false);
     return;
   }
 
@@ -812,6 +914,7 @@ async function sendText(raw, fromInput) {
       let info = {};
       try { info = await res.json(); } catch (e) {}
       if (fromInput) $('msgText').value = '';
+      clearReply();
       const key = info.id ? `${info.boot}:${info.id}` : null;
       pushMessage(activeChannel, text, 'me', myName + ' (Me)', true, key);
     } else {
@@ -870,7 +973,7 @@ function sigHtml(dbm) {
 }
 
 async function pollNodes() {
-  if (nodesBusy || activeChannel !== 'settings') return;
+  if (nodesBusy) return;
   nodesBusy = true;
   try {
     const res = await timedFetch('/nodes?limit=' + nodeLimit, {}, 4000);
@@ -881,11 +984,15 @@ async function pollNodes() {
     let summary = `${d.direct} direct · ${d.total - d.direct} via relay`;
     if (d.shown < d.total) summary += ` · showing ${d.shown} of ${d.total}`;
     $('nodeSummary').innerText = d.total === 0 ? 'No other nodes heard yet.' : summary;
-    $('nodeList').innerHTML = d.nodes.map((n) => {
+    
+    const nodeRowsHtml = d.nodes.map((n) => {
       const where = n.h <= 1 ? 'Direct' : `${n.h} hops`;
       const sig = n.r === null ? `<small>${n.h <= 1 ? 'signal n/a' : 'via relay'}</small>` : sigHtml(n.r);
       return `<div class="node-row"><div><div class="node-name">${esc(n.n)}</div><small>${where} · ${Number(n.a)}s ago</small></div><div class="node-sig">${sig}</div></div>`;
     }).join('');
+    
+    $('nodeList').innerHTML = nodeRowsHtml;
+    $('drawerNodeList').innerHTML = d.nodes.length ? nodeRowsHtml : '<small>No other nodes in radio range.</small>';
     $('moreNodesBtn').classList.toggle('hidden', d.shown >= d.total);
   } catch (e) {}
   nodesBusy = false;
@@ -975,7 +1082,6 @@ updatePresenceBar();
 poll();
 setInterval(poll, 1000);
 setInterval(pollNodes, 3000);
-// Keepalive: tells the node this phone is still listening on each secret channel
 setInterval(() => { groups.forEach((g) => joinGroup(g)); }, 8000);
 </script>
 </body>
@@ -1053,7 +1159,6 @@ void clearLiveEvents() {
 
 uint32_t publishLive(const String &text, const String &type, const String &group, const String &senderId) {
   if (WiFi.softAPgetStationNum() == 0) return 0;
-
   uint32_t id = 0;
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
     LiveEvent &event = liveEvents[liveIndex];
@@ -1114,16 +1219,19 @@ void updateNodePresence(const MeshPacket &packet, const RxItem &rx) {
   uint32_t now = millis();
   bool direct = memcmp(rx.src, mac, 6) == 0;
   uint8_t hopsAway = 1;
+
   if (!direct) {
     if (packet.type == ACK_MESSAGE) hopsAway = 2;
     else if (packet.hops <= MAX_HOPS) hopsAway = (uint8_t)(MAX_HOPS - packet.hops + 1);
     if (hopsAway < 2) hopsAway = 2;
   }
+
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
     int slot = -1;
     int emptySlot = -1;
     int oldest = -1;
     uint32_t oldestAge = 0;
+
     for (size_t i = 0; i < MAX_NODES; i++) {
       if (meshNodes[i].lastSeen == 0) {
         if (emptySlot == -1) emptySlot = (int)i;
@@ -1139,6 +1247,7 @@ void updateNodePresence(const MeshPacket &packet, const RxItem &rx) {
         oldestAge = age;
       }
     }
+
     if (slot == -1) {
       slot = emptySlot != -1 ? emptySlot : oldest;
       if (slot != -1) {
@@ -1148,6 +1257,7 @@ void updateNodePresence(const MeshPacket &packet, const RxItem &rx) {
         fresh.hops = hopsAway;
       }
     }
+
     if (slot != -1) {
       ActiveNode &node = meshNodes[slot];
       node.lastSeen = now;
@@ -1254,8 +1364,8 @@ bool registerGroup(const String &secret) {
   uint8_t key[32];
   uint8_t channelId[8];
   if (!deriveKeys(secret, key, channelId)) return false;
-
   bool ok = false;
+
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
     int emptySlot = -1;
     bool exists = false;
@@ -1279,16 +1389,12 @@ bool registerGroup(const String &secret) {
     }
     xSemaphoreGive(stateMutex);
   }
+
   memset(key, 0, sizeof(key));
   memset(channelId, 0, sizeof(channelId));
   return ok;
 }
 
-// ---------------------------------------------------------------------------
-// Presence helpers
-// ---------------------------------------------------------------------------
-
-// Store how many phones a remote node reports (from its heartbeat).
 void setNodePhones(const uint8_t *mac, uint8_t phones) {
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
     for (size_t i = 0; i < MAX_NODES; i++) {
@@ -1301,7 +1407,6 @@ void setNodePhones(const uint8_t *mac, uint8_t phones) {
   }
 }
 
-// Mark a local phone as listening on a channel. Returns true if it was not counted before.
 bool touchListener(const uint8_t *cid, uint32_t ip) {
   uint32_t now = millis();
   bool isNew = false;
@@ -1327,7 +1432,6 @@ bool touchListener(const uint8_t *cid, uint32_t ip) {
   return isNew;
 }
 
-// Phones on THIS node listening on a channel.
 uint8_t localPhones(const uint8_t *cid) {
   uint32_t now = millis();
   uint8_t n = 0;
@@ -1341,7 +1445,6 @@ uint8_t localPhones(const uint8_t *cid) {
   return n;
 }
 
-// Record a remote node's phone count on a channel.
 void updateGroupPeer(const uint8_t *origin, const uint8_t *cid, uint8_t phones) {
   uint32_t now = millis();
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
@@ -1363,7 +1466,6 @@ void updateGroupPeer(const uint8_t *origin, const uint8_t *cid, uint8_t phones) 
   }
 }
 
-// Phones on OTHER nodes listening on a channel.
 uint32_t remoteGroupPhones(const uint8_t *cid) {
   uint32_t now = millis(), total = 0;
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
@@ -1376,7 +1478,6 @@ uint32_t remoteGroupPhones(const uint8_t *cid) {
   return total;
 }
 
-// Public channel: my phones + phones reported by every other node.
 uint32_t publicListeners() {
   uint32_t now = millis();
   uint32_t total = (uint32_t)WiFi.softAPgetStationNum();
@@ -1446,7 +1547,6 @@ bool decryptPrivate(const MeshPacket &packet, uint8_t *plaintext, char *groupNam
     xSemaphoreGive(stateMutex);
   }
   if (!found) return false;
-
   uint8_t aad[25];
   size_t aadLength = makeAAD(packet, aad);
   mbedtls_gcm_context ctx;
@@ -1493,8 +1593,6 @@ bool broadcastPacket(const MeshPacket &packet) {
   return esp_now_send(BROADCAST_MAC, (const uint8_t *)&packet, sizeof(packet)) == ESP_OK;
 }
 
-// Announce (encrypted) how many local phones are listening on one secret channel.
-// Round-robins through registered groups, one per call.
 void sendGroupPresence() {
   char name[32] = {};
   uint8_t cid[8] = {};
@@ -1513,10 +1611,8 @@ void sendGroupPresence() {
     xSemaphoreGive(stateMutex);
   }
   if (!have) return;
-
   uint8_t phones = localPhones(cid);
   if (phones == 0) return;
-
   MeshPacket p = {};
   p.magic = PACKET_MAGIC;
   p.version = 1;
@@ -1569,15 +1665,11 @@ void processPacket(MeshPacket &packet, const RxItem &rx) {
   if (packet.length > MAX_TEXT || packet.hops == 0) return;
   if (seenBeforeAndRemember(packet)) return;
   statProcessed++;
-
   updateNodePresence(packet, rx);
 
-  // Heartbeat carries the number of phones connected to that node.
-  // Old firmware sends length 0, which counts as 0 phones.
   if (packet.type == PRESENCE_MESSAGE) {
     setNodePhones(packet.origin, packet.length == 1 ? packet.payload[0] : 0);
   }
-
   if (packet.type == ACK_MESSAGE) {
     if (packet.length != 10) return;
     uint8_t target[6];
@@ -1590,7 +1682,6 @@ void processPacket(MeshPacket &packet, const RxItem &rx) {
       return;
     }
   }
-
   String origin = hashId(packet.origin);
   if (packet.type == PUBLIC_MESSAGE) {
     char message[128] = {};
@@ -1607,7 +1698,6 @@ void processPacket(MeshPacket &packet, const RxItem &rx) {
       scheduleAck(packet.origin, packet.sequence, packet.hops);
     }
   } else if (packet.type == GROUP_PRESENCE_MESSAGE) {
-    // Only members of the secret can decode this; everyone else just relays it.
     if (packet.length == 1) {
       uint8_t pt[129] = {};
       char gn[32] = {};
@@ -1616,7 +1706,6 @@ void processPacket(MeshPacket &packet, const RxItem &rx) {
       }
     }
   }
-
   if (packet.hops > 1) {
     packet.hops--;
     broadcastPacket(packet);
@@ -1673,20 +1762,19 @@ void handleHome() {
 void handleEvents() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Cache-Control", "no-store");
-
   long requested = server.hasArg("cursor") ? server.arg("cursor").toInt() : 0;
   uint32_t ackSeen = server.hasArg("av") ? (uint32_t)server.arg("av").toInt() : 0;
   uint32_t nodeCount = getActiveNodesCount();
   uint32_t pubListeners = publicListeners();
   String me = clientIdentity();
-
   String json;
-  json.reserve(6000);
 
+  json.reserve(6000);
   if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
     uint32_t current = liveEventId;
     uint32_t oldest = current > LIVE_EVENT_COUNT ? current - LIVE_EVENT_COUNT + 1 : 1;
     uint32_t first;
+
     if (requested < 0) {
       first = current + 1;
     } else {
@@ -1698,33 +1786,32 @@ void handleEvents() {
       last = first + EVENTS_PER_REPLY - 1;
     }
     uint32_t replyCursor = (requested < 0 || first > current) ? current : last;
-
-    json = "{\"boot\":" + String(bootId) + ",\"me\":\"" + me + "\",\"cursor\":" + String(replyCursor) +
-           ",\"mac\":\"" + macString(nodeMac) + "\",\"nodes\":" + String(nodeCount) +
+    json = "{\"boot\":" + String(bootId) + ",\"me\":\"" + me + "\",\"cursor\":" + String(replyCursor) +  
+           ",\"mac\":\"" + macString(nodeMac) + "\",\"nodes\":" + String(nodeCount) +  
            ",\"pub\":" + String(pubListeners) + ",\"events\":[";
 
-    bool firstItem = true;
-    for (uint32_t id = first; id <= last; id++) {
-      LiveEvent &ev = liveEvents[(id - 1) % LIVE_EVENT_COUNT];
-      if (!ev.valid || ev.id != id) continue;
-      if (!firstItem) json += ",";
-      json += "{\"id\":" + String(ev.id) + ",\"text\":\"" + jsonEscape(ev.text) +
-              "\",\"type\":\"" + jsonEscape(ev.type) + "\",\"group\":\"" + jsonEscape(ev.group) +
-              "\",\"sender\":\"" + jsonEscape(ev.sender) + "\"}";
-      firstItem = false;
-    }
-    json += "],\"av\":" + String(ackVersion) + ",\"acks\":[";
-    bool firstAck = true;
-    for (size_t i = 0; i < LIVE_EVENT_COUNT; i++) {
-      LiveEvent &ev = liveEvents[i];
-      if (ev.valid && ev.mine && ev.acked && ev.ackVer > ackSeen) {
-        if (!firstAck) json += ",";
-        json += String(ev.id);
-        firstAck = false;
-      }
-    }
-    xSemaphoreGive(stateMutex);
-    json += "]}";
+    bool firstItem = true;  
+    for (uint32_t id = first; id <= last; id++) {  
+      LiveEvent &ev = liveEvents[(id - 1) % LIVE_EVENT_COUNT];  
+      if (!ev.valid || ev.id != id) continue;  
+      if (!firstItem) json += ",";  
+      json += "{\"id\":" + String(ev.id) + ",\"text\":\"" + jsonEscape(ev.text) +  
+              "\",\"type\":\"" + jsonEscape(ev.type) + "\",\"group\":\"" + jsonEscape(ev.group) +  
+              "\",\"sender\":\"" + jsonEscape(ev.sender) + "\"}";  
+      firstItem = false;  
+    }  
+    json += "],\"av\":" + String(ackVersion) + ",\"acks\":[";  
+    bool firstAck = true;  
+    for (size_t i = 0; i < LIVE_EVENT_COUNT; i++) {  
+      LiveEvent &ev = liveEvents[i];  
+      if (ev.valid && ev.mine && ev.acked && ev.ackVer > ackSeen) {  
+        if (!firstAck) json += ",";  
+        json += String(ev.id);  
+        firstAck = false;  
+      }  
+    }  
+    xSemaphoreGive(stateMutex);  
+    json += "]}";  
   } else {
     json = "{\"boot\":" + String(bootId) + ",\"cursor\":0,\"nodes\":1,\"events\":[]}";
   }
@@ -1732,7 +1819,6 @@ void handleEvents() {
 }
 
 enum BatteryState { BAT_DISABLED = 0, BAT_OK = 1, BAT_NONE = 2, BAT_BAD_PIN = 3 };
-
 BatteryState batteryState = BAT_DISABLED;
 float batteryCellV = 0.0f;
 int batteryStep = 0;
@@ -1884,14 +1970,11 @@ bool rowBefore(const NodeRow &a, const NodeRow &b) {
 void handleNodes() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   server.sendHeader("Cache-Control", "no-store");
-
   long limit = server.hasArg("limit") ? server.arg("limit").toInt() : 20;
   if (limit < 1) limit = 1;
   if (limit > (long)MAX_NODES) limit = (long)MAX_NODES;
-
   int myRssi = 0;
   bool haveMyRssi = clientRssi(&myRssi);
-
   NodeRow rows[MAX_NODES];
   size_t count = 0;
   uint32_t now = millis();
@@ -1926,14 +2009,15 @@ void handleNodes() {
     if (rows[i].hops <= 1) direct++;
   }
   size_t shown = count < (size_t)limit ? count : (size_t)limit;
-
   String json;
+
   json.reserve(300 + shown * 80);
   json = "{\"myRssi\":";
   json += haveMyRssi ? String(myRssi) : String("null");
   json += ",\"total\":" + String((uint32_t)count) + ",\"direct\":" + String((uint32_t)direct) +
           ",\"shown\":" + String((uint32_t)shown) + ",\"full\":" + String(count >= MAX_NODES ? "true" : "false") +
           ",\"bat\":" + batteryJson() + ",\"nodes\":[";
+
   for (size_t i = 0; i < shown; i++) {
     if (i > 0) json += ",";
     json += "{\"n\":\"" + macString(rows[i].mac) + "\",\"r\":";
@@ -1944,7 +2028,6 @@ void handleNodes() {
   server.send(200, "application/json; charset=utf-8", json);
 }
 
-// Doubles as the presence keepalive: the page calls this every ~8s per channel.
 void handleJoin() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   String secret = server.hasArg("secret") ? server.arg("secret") : "";
@@ -1960,7 +2043,7 @@ void handleJoin() {
   uint32_t n = 0;
   if (deriveKeys(secret, key, cid)) {
     bool isNew = touchListener(cid, (uint32_t)server.client().remoteIP());
-    if (isNew) nextGroupPresenceAt = 0;   // announce a new listener right away
+    if (isNew) nextGroupPresenceAt = 0;
     n = (uint32_t)localPhones(cid) + remoteGroupPhones(cid);
   }
   memset(key, 0, sizeof(key));
@@ -1969,7 +2052,6 @@ void handleJoin() {
 
 void handleSend() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
-
   uint32_t clientIP = (uint32_t)server.client().remoteIP();
   if (checkRateLimit(clientIP)) {
     server.send(429, "text/plain", "Rate limit: 1 message per 1.5 seconds.");
@@ -1980,7 +2062,6 @@ void handleSend() {
   String type = server.hasArg("type") ? server.arg("type") : "";
   String secret = server.hasArg("secret") ? server.arg("secret") : "";
   String sender = clientIdentity();
-
   message.trim();
 
   if (message.length() == 0 || message.length() > MAX_TEXT) {
@@ -2036,8 +2117,8 @@ void meshBackgroundLogic() {
   while (xQueueReceive(rxQueue, &item, 0) == pdTRUE) {
     processPacket(item.packet, item);
   }
-
   uint32_t now = millis();
+
   for (size_t i = 0; i < MAX_PENDING_ACKS; i++) {
     if (pendingAcks[i].valid && (int32_t)(now - pendingAcks[i].dueAt) >= 0) {
       pendingAcks[i].valid = false;
@@ -2056,8 +2137,6 @@ void meshBackgroundLogic() {
     }
   }
 
-  // Send the heartbeat right away when a phone connects or disconnects,
-  // so other nodes update their public "listening" count quickly.
   static uint8_t lastStations = 0;
   uint8_t stations = WiFi.softAPgetStationNum();
   if (stations != lastStations) {
@@ -2073,7 +2152,7 @@ void meshBackgroundLogic() {
     hb.type = PRESENCE_MESSAGE;
     hb.hops = MAX_HOPS;
     hb.length = 1;
-    hb.payload[0] = stations;   // phones connected to this node
+    hb.payload[0] = stations;
     memcpy(hb.origin, nodeMac, sizeof(nodeMac));
     hb.sequence = nextSequence();
     seenBeforeAndRemember(hb);
@@ -2110,6 +2189,7 @@ void setup() {
   memset(groupKeys, 0, sizeof(groupKeys));
   memset(groupPeers, 0, sizeof(groupPeers));
   memset(listeners, 0, sizeof(listeners));
+
   clearLiveEvents();
   txSequence = esp_random();
   bootId = esp_random();
@@ -2126,7 +2206,6 @@ void setup() {
   }
 
   String ssid = "ESP_NOW_" + macString(nodeMac);
-
   if (!WiFi.softAP(ssid.c_str(), nullptr, WIFI_CHANNEL, false, 8)) {
     fatalError("Access point startup failed. Restarting...");
   }
@@ -2179,15 +2258,13 @@ void setup() {
   });
 
   batterySetup();
-
   server.begin();
-
   lastHeartbeatTx = millis() - 25000;
 
-  #if !OGEMTN_SINGLE_CORE
-    Serial.println("Dual-Core Supported: Pinning Heavy Crypto/Mesh processing to Core 0.");
-    xTaskCreatePinnedToCore(meshTaskCore0, "MeshTask", 10240, NULL, 1, &meshTaskHandle, 0);
-  #endif
+#if !OGEMTN_SINGLE_CORE
+  Serial.println("Dual-Core Supported: Pinning Heavy Crypto/Mesh processing to Core 0.");
+  xTaskCreatePinnedToCore(meshTaskCore0, "MeshTask", 10240, NULL, 1, &meshTaskHandle, 0);
+#endif
 
   Serial.println("OGEMTN Standard WebServer started.");
 }
@@ -2201,16 +2278,18 @@ void loop() {
       (unsigned)statTxOk, (unsigned)statTxFail, statLastLen, statLastRssi,
       (unsigned)WiFi.channel(), (int)WiFi.softAPgetStationNum());
   }
+
   if ((int32_t)(millis() - batteryNextAt) >= 0) {
     batteryNextAt = millis() + 2000;
     updateBattery();
   }
+
   dnsServer.processNextRequest();
   server.handleClient();
 
-  #if OGEMTN_SINGLE_CORE
-    meshBackgroundLogic();
-  #endif
+#if OGEMTN_SINGLE_CORE
+  meshBackgroundLogic();
+#endif
 
   delay(1);
 }
