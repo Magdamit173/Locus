@@ -2,4 +2,6 @@
 __pycache__
 Locus_KiCAD-backups
 fp-lib-table
+sym-lib-table
 *.blend1
+.history
