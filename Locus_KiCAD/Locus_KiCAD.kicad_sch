@@ -3309,7 +3309,7 @@
 			(uuid "4b856590-2476-473e-ac2c-61668074e2f8")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "J2")
 					(unit 1)
@@ -3392,7 +3392,7 @@
 			(uuid "027e9432-8314-4d79-92b4-605a4d149ce0")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "D1")
 					(unit 1)
@@ -3470,7 +3470,7 @@
 			(uuid "10e27fac-18e0-42b4-935a-2b89b3071fd9")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#PWR05")
 					(unit 1)
@@ -3549,7 +3549,7 @@
 			(uuid "60c203d3-2a80-4a2b-bd08-ce402e0ca2bd")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#PWR04")
 					(unit 1)
@@ -3631,7 +3631,7 @@
 			(uuid "f3056094-8bd0-4c8d-9975-447a17adf3ba")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "R1")
 					(unit 1)
@@ -3710,7 +3710,7 @@
 			(uuid "2e9d97ef-d891-4236-810b-efc47e787a7e")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#PWR06")
 					(unit 1)
@@ -3876,7 +3876,7 @@
 			(uuid "a1de75bd-aa94-4384-89da-a05306cc2372")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "U1")
 					(unit 1)
@@ -3954,7 +3954,7 @@
 			(uuid "f197cc69-f4e6-44fd-95f6-82b1dd697fc9")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#PWR03")
 					(unit 1)
@@ -4032,7 +4032,7 @@
 			(uuid "69025d99-cfc3-49e8-a4e8-ab1d9bae3572")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#FLG01")
 					(unit 1)
@@ -4115,7 +4115,7 @@
 			(uuid "f53e469d-116c-47be-a2b7-b609838d52b7")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "J4")
 					(unit 1)
@@ -4201,7 +4201,7 @@
 			(uuid "54e446f9-6930-4444-981c-f508f64d8f49")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "J5")
 					(unit 1)
@@ -4279,7 +4279,7 @@
 			(uuid "6dc6adc8-e6a8-40f9-97f0-2a00a20c0f16")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#PWR01")
 					(unit 1)
@@ -4357,7 +4357,7 @@
 			(uuid "7d6aa4a3-4cac-4d0b-96f6-42f52454434b")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#PWR02")
 					(unit 1)
@@ -4439,7 +4439,7 @@
 			(uuid "57efe732-ec2e-4aae-b579-d4ca15ada75c")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "R2")
 					(unit 1)
@@ -4520,7 +4520,7 @@
 			(uuid "f3a1a3d4-2827-4f00-aa0b-781f3224395e")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "J1")
 					(unit 1)
@@ -4598,7 +4598,7 @@
 			(uuid "e0953734-0759-42d6-a034-efbbb48a8779")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "#FLG02")
 					(unit 1)
@@ -4694,7 +4694,7 @@
 			(uuid "d1124ecc-f9a1-432e-bcc3-2d77df31fd1e")
 		)
 		(instances
-			(project "OGEMTN_kicad"
+			(project "Locus_KiCAD"
 				(path "/1d08dbe4-bf5c-4c46-8933-91c2911ec207"
 					(reference "J3")
 					(unit 1)

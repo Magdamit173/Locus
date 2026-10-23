@@ -184,7 +184,7 @@
 		(property ki_fp_filters "BarrelJack*")
 		(path "/8bdaab4f-24cb-4684-88dd-d88d996abb08")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -510,7 +510,7 @@
 		(property ki_fp_filters "TerminalBlock*:*")
 		(path "/0acc15bc-2edf-480d-92ee-f02c2b3587c4")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -948,7 +948,7 @@
 		(property ki_fp_filters "LED* LED_SMD:* LED_THT:*")
 		(path "/0f7897d0-0ffa-429f-a2e8-47bd852d695d")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -1180,7 +1180,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/ba72c51a-56f5-4165-be2a-65804760a1e8")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -1358,7 +1358,7 @@
 		)
 		(path "/409ea32b-3297-4cbe-b31c-0907b14693b7")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -2550,7 +2550,7 @@
 		(property ki_fp_filters "TerminalBlock*:*")
 		(path "/dc27ae04-8150-48aa-ba79-d670fa5d4c77")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -2904,7 +2904,7 @@
 		(property ki_fp_filters "TerminalBlock*:*")
 		(path "/9cd3dfcc-55f4-45aa-bd12-2a0b7b324834")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -3342,7 +3342,7 @@
 		(property ki_fp_filters "R_*")
 		(path "/39598cf9-4330-4f42-a2f2-1764afa23f80")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
@@ -3521,7 +3521,7 @@
 		(property ki_fp_filters "TerminalBlock*:*")
 		(path "/f75df7db-d704-4443-bc70-4aee3aaebb94")
 		(sheetname "/")
-		(sheetfile "OGEMTN_kicad.kicad_sch")
+		(sheetfile "Locus_KiCAD.kicad_sch")
 		(units
 			(unit
 				(name "A")
