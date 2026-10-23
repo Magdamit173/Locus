@@ -1,0 +1,5 @@
+.*lck
+__pycache__
+Locus_KiCAD-backups
+fp-lib-table
+*.blend1

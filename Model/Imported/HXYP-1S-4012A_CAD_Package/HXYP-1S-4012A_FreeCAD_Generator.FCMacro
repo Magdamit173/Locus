@@ -1,0 +1,204 @@
+import os
+import math
+import FreeCAD as App
+import Part
+import Import
+
+L = 40.0
+W = 12.0
+PCB_T = 0.8
+PAD_T = 0.08
+BLUE = (0.035, 0.26, 0.55)
+GOLD = (0.78, 0.64, 0.39)
+SILVER = (0.72, 0.74, 0.73)
+DARK = (0.055, 0.06, 0.07)
+WHITE = (0.94, 0.94, 0.90)
+
+via_points = [
+(0.55,0.55),(1.15,0.55),(1.75,0.55),(0.55,1.15),(1.15,1.15),(1.75,1.15),(0.55,1.75),(1.15,1.75),(1.75,1.75),
+(4.2,0.45),(4.2,1.05),(4.2,1.65),(10.6,0.45),(10.6,1.0),(13.2,0.55),(14.1,0.55),(15.6,0.45),
+(20.0,0.5),(30.2,0.55),(31.0,0.55),(32.0,0.55),(33.2,0.55),(34.4,0.55),(35.5,0.55),
+(38.1,0.55),(38.8,0.55),(39.45,0.55),(38.1,1.2),(38.8,1.2),(39.45,1.2),
+(0.55,10.4),(1.15,10.4),(1.75,10.4),(0.55,11.05),(1.15,11.05),(1.75,11.05),
+(4.2,10.9),(4.2,11.5),(10.5,11.45),(12.5,11.45),(14.2,11.45),(16.0,11.5),(17.5,11.5),
+(31.0,11.5),(32.2,11.5),(33.5,11.5),(34.8,11.5),(36.0,11.5),(38.1,10.1),(38.8,10.1),(39.45,10.1),
+(38.1,10.8),(38.8,10.8),(39.45,10.8),(38.1,11.45),(38.8,11.45),(39.45,11.45),
+(5.0,6.0),(5.6,6.0),(10.0,6.0),(11.0,6.0),(12.0,6.0),(13.2,4.8),(13.9,4.8),(14.8,4.8),
+(15.0,5.5),(15.0,6.0),(21.2,5.1),(21.8,5.1),(22.6,5.1),(23.4,5.1),(29.9,5.0),(30.6,5.0),(31.3,5.0),
+(14.7,11.0),(15.3,11.0),(22.0,11.1),(22.7,11.1),(30.8,10.9),(31.5,10.9)
+]
+
+doc = App.newDocument("HXYP_1S_4012A_Replica")
+root = doc.addObject("App::DocumentObjectGroup", "HXYP4012A_Replica")
+root.Label = "HXYP-1S-4012A 1:1 visual replica"
+objects_for_export = []
+
+def add_feature(name, label, shape, color):
+    obj = doc.addObject("Part::Feature", name)
+    obj.Label = label
+    obj.Shape = shape
+    obj.ViewObject.ShapeColor = color
+    obj.ViewObject.LineColor = (0.15, 0.15, 0.15)
+    obj.ViewObject.DisplayMode = "Flat Lines"
+    root.addObject(obj)
+    objects_for_export.append(obj)
+    return obj
+
+def compound(shapes):
+    shapes = [s for s in shapes if s and not s.isNull()]
+    return Part.makeCompound(shapes) if shapes else Part.Shape()
+
+def make_box(cx, cy, zbase, sx, sy, sz):
+    return Part.makeBox(sx, sy, sz, App.Vector(cx - sx / 2.0, cy - sy / 2.0, zbase))
+
+def make_cylinder(x, y, zbase, radius, height):
+    return Part.makeCylinder(radius, height, App.Vector(x, y, zbase))
+
+def make_oval_pad(cx, cy, zbase):
+    pts = []
+    for i in range(64):
+        a = 2.0 * math.pi * i / 64.0
+        pts.append(App.Vector(cx + 2.65 * math.cos(a), cy + 1.55 * math.sin(a), zbase))
+    pts.append(pts[0])
+    wire = Part.makePolygon(pts)
+    solid = Part.Face(wire).extrude(App.Vector(0, 0, PAD_T))
+    bore = make_cylinder(cx, cy, zbase - 0.01, 0.625, PAD_T + 0.02)
+    return solid.cut(bore)
+
+def add_side_pads(prefix, zbase, backside=False):
+    pads = []
+    pads.append(make_oval_pad(8.0, 2.9, zbase))
+    pads.append(make_oval_pad(8.35, 9.15, zbase))
+    pads.append(make_box(2.15, 6.5, zbase, 2.5, 4.0, PAD_T))
+    pads.append(make_box(37.7, 5.7, zbase, 2.5, 4.0, PAD_T))
+    for cx, cy in [(8.0,2.9),(8.35,9.15)]:
+        disk_z = zbase + PAD_T if not backside else zbase - 0.025
+        pads.append(make_cylinder(cx, cy, disk_z, 0.39, 0.025))
+    add_feature(prefix + "ContactPads", prefix + " plated contacts", compound(pads), GOLD)
+    outlines = []
+    zline = PCB_T + 0.001 if not backside else -0.025
+    for cx, cy in [(2.15,6.5),(37.7,5.7)]:
+        sx, sy = 2.8, 4.3
+        outlines.extend([
+            make_box(cx-sx/2+0.065,cy,zline,0.13,sy,0.025),
+            make_box(cx+sx/2-0.065,cy,zline,0.13,sy,0.025),
+            make_box(cx,cy+sy/2-0.065,zline,sx,0.13,0.025),
+            make_box(cx,cy-sy/2+0.065,zline,sx,0.13,0.025)
+        ])
+    add_feature(prefix + "PadOutlines", prefix + " terminal pad outlines", compound(outlines), WHITE)
+
+def add_smd(name, cx, cy, sx, sy, h):
+    metal = [
+        make_box(cx, cy-sy/2+0.14, PCB_T+0.015, sx, 0.28, 0.12),
+        make_box(cx, cy+sy/2-0.14, PCB_T+0.015, sx, 0.28, 0.12)
+    ]
+    add_feature(name+"Terminals", name + " metal terminals", compound(metal), SILVER)
+    body = make_box(cx, cy, PCB_T+0.075, sx-0.08, sy-0.44, h-0.06)
+    add_feature(name+"Body", name + " package", body, DARK)
+    marking = make_box(cx, cy, PCB_T+h+0.075, sx-0.2, 0.24, 0.015)
+    add_feature(name+"Marking", name + " package marking", marking, (0.86,0.82,0.68))
+
+def add_mosfet(name, cx, cy):
+    land = make_box(cx, cy, PCB_T+0.015, 5.8, 4.7, 0.12)
+    add_feature(name+"Land", name + " solder land", land, SILVER)
+    leads = []
+    for yy in [-1.55, 1.55]:
+        leads.append(make_box(cx-2.65,cy+yy,PCB_T+0.03,0.7,0.8,0.22))
+        leads.append(make_box(cx+2.65,cy+yy,PCB_T+0.03,0.7,0.8,0.22))
+    add_feature(name+"Leads", name + " metal leads", compound(leads), SILVER)
+    h = 2.46
+    body = make_box(cx, cy, PCB_T+0.12, 5.3, 4.5, h)
+    add_feature(name+"Body", name + " MOSFET package", body, DARK)
+    shade = make_box(cx, cy, PCB_T+0.12+h, 4.7, 3.9, 0.015)
+    add_feature(name+"Top", name + " package top surface", shade, (0.12,0.13,0.14))
+
+board = Part.makeBox(L, W, PCB_T, App.Vector(0,0,0))
+cutters = [make_cylinder(x,y,-0.02,0.1,PCB_T+0.04) for x,y in via_points]
+cutters.extend([
+    make_cylinder(8.0,2.9,-0.02,0.625,PCB_T+0.04),
+    make_cylinder(8.35,9.15,-0.02,0.625,PCB_T+0.04)
+])
+board = board.cut(Part.makeCompound(cutters))
+add_feature("PCB", "Blue PCB, 40 x 12 x 0.8 mm", board, BLUE)
+
+via_shapes = []
+for x,y in via_points:
+    via_shapes.append(make_cylinder(x,y,-0.002,0.085,0.012))
+    via_shapes.append(make_cylinder(x,y,PCB_T-0.01,0.085,0.012))
+add_feature("ViaFaces", "Vias visible on both faces", compound(via_shapes), (0.02,0.035,0.06))
+
+add_side_pads("Front", PCB_T, False)
+add_side_pads("Back", -PAD_T, True)
+
+lugs = [
+    make_box(13.1,6.0,PCB_T,2.0,0.65,PAD_T),
+    make_box(13.0,11.0,PCB_T,1.9,0.65,PAD_T),
+    make_box(13.0,8.45,PCB_T,1.0,0.55,PAD_T)
+]
+add_feature("PowerLugs", "Additional solder tabs", compound(lugs), GOLD)
+
+add_smd("R1",19.15,2.65,0.86,1.65,0.72)
+add_smd("C1",21.25,2.65,0.9,1.55,0.72)
+add_smd("R2",27.35,2.65,0.86,1.65,0.72)
+
+u1_pins = []
+for yy in [-0.48,0,0.48]:
+    u1_pins.append(make_box(24.75-0.765,2.65+yy,PCB_T+0.03,0.47,0.24,0.15))
+    u1_pins.append(make_box(24.75+0.765,2.65+yy,PCB_T+0.03,0.47,0.24,0.15))
+add_feature("U1Pins", "Protection IC pins", compound(u1_pins), SILVER)
+add_feature("U1Body", "U1 protection IC package", make_box(24.75,2.65,PCB_T+0.13,1.44,1.4,0.72), DARK)
+add_feature("U1Mark", "U1 package marking", make_box(24.75,3.0,PCB_T+0.99,0.5,0.12,0.025), (0.16,0.17,0.18))
+
+add_mosfet("Q1",18.25,8.45)
+add_mosfet("Q2",27.25,8.45)
+
+try:
+    import Draft
+    font_candidates = [
+        r"C:\Windows\Fonts\arialbd.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"
+    ]
+    font_path = next((p for p in font_candidates if os.path.exists(p)), None)
+    if font_path:
+        def add_label(txt, x, y, z, size, name):
+            shape_obj = Draft.makeShapeString(String=txt, FontFile=font_path, Size=size, Tracking=0)
+            doc.recompute()
+            shape = shape_obj.Shape.copy()
+            doc.removeObject(shape_obj.Name)
+            doc.recompute()
+            shape = shape.extrude(App.Vector(0,0,0.022))
+            shape.translate(App.Vector(x,y,z))
+            add_feature(name, txt + " silkscreen", shape, WHITE)
+        add_label("P+",3.1,0.55,PCB_T+0.006,1.05,"Text_PPlus")
+        add_label("P-",3.0,10.15,PCB_T+0.006,1.05,"Text_PMinus")
+        add_label("B+",0.35,8.65,PCB_T+0.006,1.15,"Text_BPlus")
+        add_label("B-",36.4,1.45,PCB_T+0.006,1.15,"Text_BMinus")
+        add_label("HXYP-1S",10.65,0.55,PCB_T+0.006,0.92,"Text_Model1")
+        add_label("4012A",11.6,1.75,PCB_T+0.006,0.92,"Text_Model2")
+        add_label("R1",18.65,0.35,PCB_T+0.006,0.7,"Text_R1")
+        add_label("C1",20.65,0.35,PCB_T+0.006,0.7,"Text_C1")
+        add_label("U1",24.1,0.35,PCB_T+0.006,0.7,"Text_U1")
+        add_label("R2",26.8,0.35,PCB_T+0.006,0.7,"Text_R2")
+except Exception:
+    pass
+
+doc.recompute()
+Gui.activeDocument().activeView().viewAxonometric()
+Gui.activeDocument().activeView().fitAll()
+
+try:
+    from PySide import QtGui
+except Exception:
+    from PySide6 import QtWidgets as QtGui
+suggested = os.path.join(os.path.expanduser("~"), "Documents", "HXYP-1S-4012A_Replica.FCStd")
+save_path = QtGui.QFileDialog.getSaveFileName(None, "Save HXYP-1S-4012A replica", suggested, "FreeCAD Document (*.FCStd)")
+if isinstance(save_path, tuple):
+    save_path = save_path[0]
+if save_path:
+    if not save_path.lower().endswith(".fcstd"):
+        save_path += ".FCStd"
+    doc.recompute()
+    doc.saveAs(save_path)
+    step_path = os.path.splitext(save_path)[0] + ".step"
+    Import.export(objects_for_export, step_path)
