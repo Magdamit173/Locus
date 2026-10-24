@@ -1,9 +1,12 @@
 #include <WiFi.h>
 #include <WebServer.h>
+#include <Update.h>
+#include <Preferences.h>
 #include <DNSServer.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <esp_system.h>
+#include <esp_idf_version.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
@@ -20,11 +23,11 @@
 #endif
 #include <string.h>
 
-#if defined(CONFIG_FREERTOS_UNICORE) || defined(CONFIG_IDF_TARGET_ESP32C3)
-#define OGEMTN_SINGLE_CORE 1
-#else
-#define OGEMTN_SINGLE_CORE 0
+#if !defined(CONFIG_IDF_TARGET_ESP32)
+#error "Locus firmware supports classic ESP32 only. Select ESP32 Dev Module or a compatible ESP32-WROOM board."
 #endif
+
+#define LOCUS_SINGLE_CORE 0
 
 const uint8_t WIFI_CHANNEL = 1;
 const uint8_t MAX_HOPS = 6;
@@ -45,15 +48,24 @@ const uint32_t LISTENER_TTL_MS = 30000;
 const uint32_t GROUP_PRESENCE_EVERY_MS = 5000;
 
 const bool BATTERY_SENSE_ENABLED = true;
+const char *ADMIN_PIN = "58427319";
+const char *OTA_USERNAME = "admin";
+const size_t ADMIN_SESSION_COUNT = 8;
+const uint32_t ADMIN_SESSION_IDLE_MS = 1800000UL;
+const char *LOCUS_BUILD_NAME = "Locus Admin Dashboard - 2026-10-24";
 
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
-const int BATTERY_PIN = 3;
-#else
 const int BATTERY_PIN = 34;
-#endif
+
+const int EMERGENCY_BUTTON_PIN = 4;
+const int BUZZER_PIN = 16;
+uint32_t lastHardwareEmergencyAt = 0;
+bool hardwareEmergencySent = false;
+bool emergencyButtonWasDown = false;
+bool buzzerActive = false;
+uint32_t buzzerStopTime = 0;
 
 const float DIVIDER_R_TOP_OHM = 100000.0f;
-const float DIVIDER_R_BOTTOM_OHM = 100000.0f;
+const float DIVIDER_R_BOTTOM_OHM = 200000.0f;
 const float BATTERY_CAL_FACTOR = 1.0f;
 const float NO_BATTERY_BELOW_V = 1.0f;
 const float STEP_HYSTERESIS_PCT = 3.0f;
@@ -67,6 +79,8 @@ const uint8_t PRIVATE_MESSAGE = 2;
 const uint8_t PRESENCE_MESSAGE = 3;
 const uint8_t ACK_MESSAGE = 4;
 const uint8_t GROUP_PRESENCE_MESSAGE = 5;
+const uint8_t EMERGENCY_MESSAGE = 6;
+const uint32_t EMERGENCY_COOLDOWN_MS = 30000;
 
 const uint8_t BROADCAST_MAC[6] = {
   0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF
@@ -74,6 +88,8 @@ const uint8_t BROADCAST_MAC[6] = {
 
 WebServer server(80);
 DNSServer dnsServer;
+Preferences nodePreferences;
+String nodeLocationLabel = "Unconfigured location";
 QueueHandle_t rxQueue = nullptr;
 TaskHandle_t meshTaskHandle = nullptr;
 SemaphoreHandle_t stateMutex = nullptr;
@@ -141,6 +157,18 @@ struct RateLimit {
   uint32_t lastPost;
 };
 
+struct AdminSession {
+  char token[33];
+  uint32_t lastActivity;
+  bool valid;
+};
+
+struct EmergencyRateEntry {
+  uint32_t ip;
+  uint32_t lastAt;
+  bool valid;
+};
+
 struct GroupKey {
   uint8_t key[32];
   uint8_t channelId[8];
@@ -174,6 +202,8 @@ SeenEntry seenCache[SEEN_CACHE_SIZE] = {};
 LiveEvent liveEvents[LIVE_EVENT_COUNT] = {};
 ActiveNode meshNodes[MAX_NODES] = {};
 RateLimit clientLimits[8] = {};
+AdminSession adminSessions[ADMIN_SESSION_COUNT] = {};
+EmergencyRateEntry emergencyRateLimits[16] = {};
 GroupKey groupKeys[MAX_GROUPS] = {};
 PendingAck pendingAcks[MAX_PENDING_ACKS] = {};
 GroupPeer groupPeers[MAX_GROUP_PEERS] = {};
@@ -202,7 +232,7 @@ const char PAGE[] PROGMEM = R"html(
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=0,interactive-widget=resizes-content">
-<title>OGEMTN Mesh</title>
+<title>Locus Mesh</title>
 <style>
 :root { --bg: #f2f5fa; --surface: #ffffff; --text: #182230; --border: #e2e8f0; --primary: #175cd3; --msg-bg: #f1f5f9; --my-msg: #dbeafe; --danger: #ef4444; --overlay: rgba(0,0,0,0.4); }
 body.dark { --bg: #0f172a; --surface: #1e293b; --text: #f8fafc; --border: #334155; --primary: #3b82f6; --msg-bg: #334155; --my-msg: #1e3a8a; --danger: #dc2626; --overlay: rgba(0,0,0,0.7); }
@@ -246,6 +276,9 @@ button.secondary { background: var(--border); color: var(--text); }
 
 .msg { padding: 10px 14px; border-radius: 12px; max-width: 80%; background: var(--msg-bg); align-self: flex-start; word-wrap: break-word; overflow-wrap: anywhere; position: relative; box-shadow: 0 1px 2px rgba(0,0,0,0.05); }
 .msg.self { background: var(--my-msg); align-self: flex-end; }
+.msg.emergency { border: 2px solid #ef4444; animation: locusEmergencyPulse 1s ease-in-out infinite; }
+@keyframes locusEmergencyPulse { 0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,.30); } 50% { box-shadow: 0 0 0 5px rgba(239,68,68,.08); } }
+#sosToggle { width:auto; margin:0 8px; padding:7px 11px; background:#dc2626; color:white; border:0; border-radius:7px; font-weight:800; }
 .msg-header { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 4px; }
 .msg-sender { font-weight: 700; font-size: 0.8rem; opacity: 0.9; }
 .msg-reply-btn { background: none; border: none; color: var(--primary); cursor: pointer; font-size: 0.75rem; padding: 0; margin: 0; width: auto; opacity: 0.75; font-weight: bold; }
@@ -283,6 +316,8 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
 .settings-panel { position: absolute; top:0; left:0; right:0; bottom:0; background: var(--surface); padding: 24px; display: none; overflow-y: auto; z-index: 10; }
 .settings-panel.active { display: block; }
 .setting-group { margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+.settings-nav-button { display:flex; align-items:center; justify-content:space-between; gap:12px; width:100%; padding:12px 14px; margin-top:8px; text-align:left; background:var(--surface); border:1px solid var(--border); color:var(--text); border-radius:8px; font-weight:700; }
+.settings-nav-button:hover { border-color:var(--primary); opacity:1; }
 
 .bat-bar { display: flex; gap: 3px; margin-top: 8px; }
 .bat-seg { flex: 1; height: 16px; border-radius: 3px; background: var(--border); }
@@ -316,9 +351,12 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
 <header>
   <div style="display:flex; align-items:center;">
     <button id="menuToggle">☰</button>
-    <div style="font-weight:bold; font-size:1.15rem; margin-left:4px;">OGEMTN <span id="nodeBadge" class="badge">1 node</span></div>
+    <div style="font-weight:bold; font-size:1.15rem; margin-left:4px;">Locus <span id="nodeBadge" class="badge">1 node</span></div>
   </div>
-  <button id="infoToggle" title="Network & Device Status">📶 Info</button>
+  <div style="display:flex;align-items:center;gap:6px;">
+    <button id="sosToggle" type="button" title="Open emergency quick actions">SOS</button>
+    <button id="infoToggle" title="Network & Device Status">📶 Info</button>
+  </div>
 </header>
 
 <div class="app-container">
@@ -375,16 +413,19 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
       <details>
         <summary>Emergency Quick Alerts</summary>
         <div class="quick-chat" id="quickChat">
-          <button class="quick-btn" data-q="🆘 SOS: Trapped & Need Rescue!">🆘 Trapped & Rescue</button>
-          <button class="quick-btn" data-q="🚑 Medical: Severe Injury / Medic Needed!">🚑 Medic Needed</button>
-          <button class="quick-btn" data-q="🌊 Danger: Fast Rising Flood Water!">🌊 Rising Flood</button>
-          <button class="quick-btn" data-q="🔥 Danger: Fire Nearby / Route Blocked!">🔥 Fire Blocked</button>
-          <button class="quick-btn" data-q="💧 Request: Need Clean Water & Supplies!">💧 Need Water/Food</button>
-          <button class="quick-btn" data-q="📍 Status: Holding Position / Waiting Here">📍 Holding Position</button>
-          <button class="quick-btn" data-q="🏃 Status: Moving to High Ground">🏃 Moving High</button>
-          <button class="quick-btn" data-q="🔋 Power: Critical Battery Level (<5%)">🔋 Critical Power</button>
-          <button class="quick-btn" data-q="✅ Status: Safe & Fully Accounted For">✅ Safe & Accounted</button>
-          <button class="quick-btn" data-q="👀 Net: Monitoring Channel Activity">👀 Monitoring Net</button>
+          <button class="quick-btn" data-sos="MEDICAL: NEED MEDICAL ASSISTANCE">🚑 Medical assistance</button>
+          <button class="quick-btn" data-sos="MEDICAL: SEVERE BLEEDING / MAJOR INJURY">🩺 Severe injury</button>
+          <button class="quick-btn" data-sos="FIRE/RESCUE: FIRE OR SMOKE REPORTED">🔥 Fire / smoke</button>
+          <button class="quick-btn" data-sos="FIRE/RESCUE: TRAPPED / CANNOT EVACUATE">🆘 Trapped / rescue</button>
+          <button class="quick-btn" data-sos="PUBLIC SAFETY: IMMEDIATE THREAT / SECURITY HELP NEEDED">🚨 Public safety threat</button>
+          <button class="quick-btn" data-sos="PUBLIC SAFETY: MISSING OR VULNERABLE PERSON">🔎 Missing person</button>
+          <button class="quick-btn" data-sos="NATURAL/ENVIRONMENTAL: EARTHQUAKE DAMAGE OR AFTERSHOCK DANGER">🌎 Earthquake damage</button>
+          <button class="quick-btn" data-sos="NATURAL/ENVIRONMENTAL: FLOODING OR RISING WATER">🌊 Flooding / rising water</button>
+          <button class="quick-btn" data-sos="NATURAL/ENVIRONMENTAL: LANDSLIDE OR SEVERE WEATHER DANGER">⛈️ Severe weather / landslide</button>
+          <button class="quick-btn" data-sos="SUPPLIES: NEED CLEAN WATER OR FIRST-AID SUPPLIES">💧 Need supplies</button>
+          <button class="quick-btn" data-sos="STATUS: HOLDING POSITION">📍 Holding position</button>
+          <button class="quick-btn" data-sos="STATUS: MOVING TO HIGH GROUND">🏃 Moving to safety</button>
+          <button class="quick-btn" data-sos="STATUS: CLEAR / SAFE HERE">✅ Safe here</button>
         </div>
       </details>
       <form id="msgForm" class="input-row">
@@ -414,6 +455,12 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
         <div id="nodeSummary" style="margin-top:4px; opacity:0.8; font-size:0.85rem;">Listening...</div>
         <div id="nodeList" style="margin-top:6px;"></div>
         <button id="moreNodesBtn" class="secondary hidden" style="margin-top:8px;">Show more</button>
+      </div>
+      <div class="setting-group">
+        <label><b>Administrator Console</b></label>
+        <p class="muted">Node labels and firmware maintenance are restricted to the password-protected admin panel.</p>
+        <button type="button" id="openAdminBtn" class="settings-nav-button"><span>Open Locus Admin Console</span><span aria-hidden="true">→</span></button>
+        <p class="muted">Each ESP32 has its own admin console. A central controller for all nodes would need a separate authenticated mesh-management protocol.</p>
       </div>
       <div class="setting-group">
         <label><b>Display Name</b></label>
@@ -455,18 +502,49 @@ body.dark #presenceBar.warn { background: #450a0a; color: #fecaca; }
   </div>
 </div>
 
+<div id="sosInitialModal" class="modal-overlay hidden">
+  <div class="modal-box" style="border-top: 5px solid var(--danger); width: 95%; max-width: 400px;">
+    <h3 style="margin-top:0; color:var(--danger);">EMERGENCY CHECK-IN</h3>
+    <p style="font-size:0.85rem;">State your situation and location.</p>
+    <input type="text" id="sosLocInput" placeholder="Enter location (e.g., Room 302)..." style="margin-bottom: 12px; font-weight:bold;">
+    <div style="display:flex; flex-direction:column; gap:8px; max-height:65vh; overflow-y:auto;">
+      <h4 style="margin:4px 0 0;text-align:left;">Medical emergencies</h4>
+      <button style="background:#dc2626;" onclick="sendSos('MEDICAL: NEED MEDICAL ASSISTANCE')">🚑 Need medical assistance</button>
+      <button style="background:#dc2626;" onclick="sendSos('MEDICAL: SEVERE BLEEDING / MAJOR INJURY')">🩺 Severe bleeding / major injury</button>
+      <button style="background:#dc2626;" onclick="sendSos('MEDICAL: UNCONSCIOUS PERSON')">🫀 Unconscious person</button>
+      <h4 style="margin:8px 0 0;text-align:left;">Fire and rescue</h4>
+      <button style="background:#b91c1c;" onclick="sendSos('FIRE/RESCUE: FIRE OR SMOKE REPORTED')">🔥 Fire or smoke</button>
+      <button style="background:#b45309;" onclick="sendSos('FIRE/RESCUE: TRAPPED / CANNOT EVACUATE')">🆘 Trapped / cannot evacuate</button>
+      <button style="background:#b45309;" onclick="sendSos('FIRE/RESCUE: CHEMICAL SPILL / GAS LEAK')">☣️ Chemical spill / gas leak</button>
+      <h4 style="margin:8px 0 0;text-align:left;">Public safety and security</h4>
+      <button style="background:#7c3aed;" onclick="sendSos('PUBLIC SAFETY: IMMEDIATE THREAT / SECURITY HELP NEEDED')">🚨 Immediate threat / security help</button>
+      <button style="background:#7c3aed;" onclick="sendSos('PUBLIC SAFETY: MISSING OR VULNERABLE PERSON')">🔎 Missing / vulnerable person</button>
+      <h4 style="margin:8px 0 0;text-align:left;">Natural and environmental disasters</h4>
+      <button style="background:#2563eb;" onclick="sendSos('NATURAL/ENVIRONMENTAL: EARTHQUAKE DAMAGE OR AFTERSHOCK DANGER')">🌎 Earthquake damage / aftershock danger</button>
+      <button style="background:#2563eb;" onclick="sendSos('NATURAL/ENVIRONMENTAL: FLOODING OR RISING WATER')">🌊 Flooding / rising water</button>
+      <button style="background:#2563eb;" onclick="sendSos('NATURAL/ENVIRONMENTAL: LANDSLIDE OR SEVERE WEATHER DANGER')">⛈️ Landslide / severe weather</button>
+      <h4 style="margin:8px 0 0;text-align:left;">Status and other</h4>
+      <button style="background:#3b82f6;" onclick="sendSos('STATUS: CLEAR / SAFE HERE')">✅ Clear / safe here</button>
+      <label for="sosCustomInput" style="text-align:left;font-weight:700;">Other emergency</label>
+      <input type="text" id="sosCustomInput" maxlength="50" placeholder="Describe another urgent problem">
+      <button style="background:#991b1b;" onclick="sendSosCustom()">Send Custom SOS</button>
+      <button class="secondary" style="margin-top:8px;" onclick="closeSosModal()">Skip / Close</button>
+    </div>
+  </div>
+</div>
+
 <script>
-const HISTORY_KEY = 'ogemtn.history';
-const GROUPS_KEY = 'ogemtn.groups';
-const SETTINGS_KEY = 'ogemtn.settings';
-const BLOCKED_KEY = 'ogemtn.blocked';
+const HISTORY_KEY = 'locus.history';
+const GROUPS_KEY = 'locus.groups';
+const SETTINGS_KEY = 'locus.settings';
+const BLOCKED_KEY = 'locus.blocked';
 
 const $ = (id) => document.getElementById(id);
 
 let storageOk = true;
 try {
-  localStorage.setItem('ogemtn.test', '1');
-  localStorage.removeItem('ogemtn.test');
+  localStorage.setItem('locus.test', '1');
+  localStorage.removeItem('locus.test');
 } catch (e) {
   storageOk = false;
 }
@@ -487,8 +565,17 @@ const store = {
   }
 };
 
+function safeSessionGet(key) {
+  try { return sessionStorage.getItem(key); } catch (e) { return null; }
+}
+
+function safeSessionSet(key, value) {
+  try { sessionStorage.setItem(key, value); } catch (e) {}
+}
+
 function esc(s) {
-  return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const map = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  return String(s).replace(/[&<>"']/g, (c) => map[c]);
 }
 
 function byteLen(s) {
@@ -516,14 +603,15 @@ const presence = {};
 
 let groups = store.get(GROUPS_KEY, []);
 let chatLog = store.get(HISTORY_KEY, []);
-let settings = store.get(SETTINGS_KEY, { theme: 'light', username: '' });
+let settings = store.get(SETTINGS_KEY, { theme: 'dark', username: '' });
 let blocked = store.get(BLOCKED_KEY, []);
 
 if (!Array.isArray(groups)) groups = [];
 if (!Array.isArray(chatLog)) chatLog = [];
 if (!Array.isArray(blocked)) blocked = [];
-if (!settings || typeof settings !== 'object') settings = { theme: 'light', username: '' };
+if (!settings || typeof settings !== 'object') settings = { theme: 'dark', username: '' };
 
+if (settings.theme !== 'light' && settings.theme !== 'dark') settings.theme = 'dark';
 if (settings.theme === 'dark') document.body.classList.add('dark');
 $('userName').value = settings.username || '';
 
@@ -567,7 +655,7 @@ function badge(ch) {
 
 function updateTitle() {
   const n = Object.values(unread).reduce((a, b) => a + b, 0);
-  document.title = n > 0 ? `(${n}) OGEMTN` : 'OGEMTN Mesh';
+  document.title = n > 0 ? `(${n}) Locus` : 'Locus Mesh';
 }
 
 function notify(channel, name, text, silent) {
@@ -585,7 +673,7 @@ function notify(channel, name, text, silent) {
   if (!viewing && hasNotif) {
     try {
       if (Notification.permission === 'granted') {
-        new Notification('OGEMTN Alert', { body: `${name}: ${text}` });
+        new Notification('Locus Alert', { body: `${name}: ${text}` });
       }
     } catch (e) {}
   }
@@ -660,7 +748,13 @@ $('closeDrawerBtn').onclick = () => {
   $('rightDrawer').classList.remove('open');
 };
 
-$('messageFeed').onclick = () => {
+$('messageFeed').onclick = (e) => {
+  const replyButton = e.target.closest('[data-reply-id]');
+  if (replyButton) {
+    const target = chatLog.find((m) => String(m.id) === replyButton.getAttribute('data-reply-id'));
+    if (target) setReply(target.senderName, target.text);
+    return;
+  }
   document.querySelector('.sidebar').classList.remove('open');
   $('rightDrawer').classList.remove('open');
 };
@@ -670,6 +764,14 @@ $('themeBtn').onclick = () => {
   settings.theme = document.body.classList.contains('dark') ? 'dark' : 'light';
   store.set(SETTINGS_KEY, settings);
 };
+
+$('openAdminBtn').onclick = () => { window.location.href = '/admin'; };
+
+window.addEventListener('storage', (event) => {
+  if (event.key !== SETTINGS_KEY) return;
+  settings = store.get(SETTINGS_KEY, settings);
+  document.body.classList.toggle('dark', settings.theme === 'dark');
+});
 
 $('userName').onchange = () => {
   settings.username = $('userName').value.replace(/:/g, '').trim();
@@ -709,6 +811,7 @@ function presLabel(ch) {
 
 function updatePresenceBar() {
   const bar = $('presenceBar');
+  if (connectionWarningShown) { bar.classList.remove('hidden'); bar.classList.add('warn'); bar.textContent = 'Connection interrupted. Reconnecting to Locus automatically…'; return; }
   if (activeChannel === 'settings') { bar.classList.add('hidden'); return; }
   bar.classList.remove('hidden');
   const n = presence[activeChannel];
@@ -853,9 +956,11 @@ $('clearBtn').onclick = () => {
 };
 
 function setReply(sender, text) {
-  activeReply = { sender, text: text.length > 25 ? text.substring(0, 25) + '...' : text };
-  $('replyTargetSender').innerText = esc(sender);
-  $('replyTargetText').innerText = esc(activeReply.text);
+  const cleanSender = String(sender || 'Unknown').slice(0, 24);
+  const cleanText = String(text || '');
+  activeReply = { sender: cleanSender, text: cleanText.length > 25 ? cleanText.substring(0, 25) + '...' : cleanText };
+  $('replyTargetSender').textContent = activeReply.sender;
+  $('replyTargetText').textContent = activeReply.text;
   $('replyBar').classList.remove('hidden');
   $('msgText').focus();
 }
@@ -866,6 +971,15 @@ function clearReply() {
 }
 
 $('cancelReplyBtn').onclick = clearReply;
+
+$('sosToggle').onclick = () => $('sosInitialModal').classList.remove('hidden');
+
+
+function isEmergencyMessage(text) {
+  const critical = /\[SOS\]|\[EMERGENCY BUTTON\]|NEED MEDICAL ASSISTANCE|TRAPPED\s*\/\s*CANNOT EVACUATE|NEED RESCUE|HARDWARE SOS/i.test(String(text));
+  const safe = /CLEAR \/ SAFE HERE|SAFE & FULLY ACCOUNTED/i.test(String(text));
+  return critical && !safe;
+}
 
 function renderMessages() {
   if (activeChannel === 'settings') return;
@@ -878,18 +992,20 @@ function renderMessages() {
       const idx = msgText.indexOf(']: ');
       const qSender = msgText.substring(3, idx);
       const rest = msgText.substring(idx + 3);
-      const spaceIdx = rest.indexOf(' ');
-      if (spaceIdx > 0) {
-        const qText = rest.substring(0, spaceIdx);
-        msgText = rest.substring(spaceIdx + 1);
+      const separator = ' ⟡ ';
+      const separatorIndex = rest.indexOf(separator);
+      if (separatorIndex > 0) {
+        const qText = rest.substring(0, separatorIndex);
+        msgText = rest.substring(separatorIndex + separator.length);
         quoteHtml = `<div class="msg-quote"><b>${esc(qSender)}</b>: ${esc(qText)}</div>`;
       }
     }
+    const emergencyClass = isEmergencyMessage(msgText) ? ' emergency' : '';
     return `
-      <div class="msg ${m.isSelf ? 'self' : ''}">
+      <div class="msg ${m.isSelf ? 'self' : ''}${emergencyClass}">
         <div class="msg-header">
           <span class="msg-sender">${esc(m.senderName)}</span>
-          <button class="msg-reply-btn" onclick="setReply('${esc(m.senderName)}', '${esc(msgText)}')">↩ reply</button>
+          <button class="msg-reply-btn" data-reply-id="${m.id}">↩ reply</button>
         </div>
         ${quoteHtml}
         <div>${esc(msgText)}</div>
@@ -921,13 +1037,13 @@ function pushMessage(channel, text, senderId, senderName, isSelf, eventKey, sile
   if (channel === activeChannel) renderMessages();
 }
 
-async function sendText(raw, fromInput) {
+async function sendText(raw, fromInput, emergency = false) {
   if (sending) return;
   let text = raw.trim();
   if (!text) return;
 
   if (activeReply) {
-    text = `↳ [${activeReply.sender}]: ${activeReply.text} ${text}`;
+    text = `↳ [${activeReply.sender}]: ${activeReply.text} ⟡ ${text}`;
   }
 
   const myName = settings.username || 'Anon';
@@ -941,6 +1057,7 @@ async function sendText(raw, fromInput) {
   const type = activeChannel === 'public' ? 'public' : 'private';
   const body = new URLSearchParams({ type, message: payloadText });
   if (type === 'private') body.set('secret', activeChannel);
+  if (emergency) body.set('emergency', '1');
 
   sending = true;
   try {
@@ -962,8 +1079,11 @@ async function sendText(raw, fromInput) {
 }
 
 $('quickChat').onclick = (e) => {
-  const btn = e.target.closest('[data-q]');
-  if (btn) sendText(btn.getAttribute('data-q'), false);
+  const btn = e.target.closest('[data-sos], [data-q]');
+  if (!btn) return;
+  const sos = btn.getAttribute('data-sos');
+  if (sos) sendSos(sos);
+  else sendText(btn.getAttribute('data-q'), false);
 };
 
 $('msgForm').onsubmit = (e) => {
@@ -1043,14 +1163,32 @@ $('moreNodesBtn').onclick = () => {
   pollNodes();
 };
 
+let pollFailureCount = 0;
+let connectionWarningShown = false;
+
 async function poll() {
   if (isPolling) return;
   isPolling = true;
   try {
-    const res = await timedFetch('/events?cursor=' + cursor + '&av=' + ackVer, {}, 4000);
+    const res = await timedFetch('/events?cursor=' + cursor + '&av=' + ackVer, { cache: 'no-store' }, 5000);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
     const data = await res.json();
+    pollFailureCount = 0;
+    if (connectionWarningShown) { connectionWarningShown = false; updatePresenceBar(); }
 
     if (data.mac) $('macDisplay').innerText = data.mac;
+    if (data.label) {
+      const locationKey = 'locus.sosLocation.' + (data.mac || 'default');
+      if (!$('sosLocInput').dataset.loaded) {
+        let savedLocation = '';
+        try { savedLocation = localStorage.getItem(locationKey) || ''; } catch (e) {}
+        $('sosLocInput').value = savedLocation || data.label;
+        $('sosLocInput').dataset.loaded = '1';
+        $('sosLocInput').addEventListener('input', () => {
+          try { localStorage.setItem(locationKey, $('sosLocInput').value); } catch (e) {}
+        });
+      }
+    }
 
     if (data.nodes !== undefined) {
       const isAlone = data.nodes <= 1;
@@ -1110,8 +1248,49 @@ async function poll() {
     }
     ackVer = bootChanged ? 0 : (data.av || 0);
     firstPoll = false;
-  } catch (e) {}
+  } catch (e) {
+    pollFailureCount++;
+    if (pollFailureCount >= 3) {
+      connectionWarningShown = true;
+      const bar = $('presenceBar');
+      bar.classList.remove('hidden');
+      bar.classList.add('warn');
+      bar.textContent = 'Connection interrupted. Reconnecting to Locus automatically…';
+    }
+  }
   isPolling = false;
+}
+
+function sendSos(problem) {
+  let loc = $('sosLocInput').value.trim() || 'Location unknown';
+  let issue = String(problem || 'GENERAL EMERGENCY').trim();
+  while (byteLen(loc) > 24) loc = loc.slice(0, -1);
+  while (byteLen(issue) > 48) issue = issue.slice(0, -1);
+  const msg = `[SOS] ${issue} | Loc: ${loc}`;
+  if (activeChannel !== 'public') setChannel('public');
+  $('msgText').value = msg;
+  const isClearStatus = /CLEAR \/ SAFE HERE|SAFE & FULLY ACCOUNTED/i.test(issue);
+  sendText(msg, true, !isClearStatus);
+  closeSosModal();
+}
+
+function sendSosCustom() {
+  const custom = $('sosCustomInput').value.trim();
+  if (!custom) {
+    showModal('Describe the emergency', 'Enter a short emergency description first.', false);
+    return;
+  }
+  sendSos(custom);
+  $('sosCustomInput').value = '';
+}
+
+function closeSosModal() {
+  $('sosInitialModal').classList.add('hidden');
+  safeSessionSet('sosShown', '1');
+}
+
+if (!safeSessionGet('sosShown')) {
+  $('sosInitialModal').classList.remove('hidden');
 }
 
 renderSoundBtn();
@@ -1126,7 +1305,144 @@ setInterval(() => { groups.forEach((g) => joinGroup(g)); }, 8000);
 </script>
 </body>
 </html>
-)html";
+ )html";
+
+const char ADMIN_LOGIN_PAGE[] PROGMEM = R"login(
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><meta http-equiv="Cache-Control" content="no-store"><title>Locus Admin Sign In</title>
+<style>:root{color-scheme:dark;--bg:#0b1220;--panel:#121d30;--text:#e8eef8;--muted:#9baec7;--border:#293b55;--accent:#70a5ff}body.light{color-scheme:light;--bg:#f2f5fa;--panel:#fff;--text:#172033;--muted:#667085;--border:#dce4ef;--accent:#175cd3}*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;padding:18px;background:var(--bg);color:var(--text);font-family:system-ui,-apple-system,"Segoe UI",sans-serif}.card{width:min(100%,420px);background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:24px;box-shadow:0 20px 55px #0004}.top{display:flex;justify-content:space-between;align-items:center;gap:8px}.mark{font-weight:900;font-size:1.4rem;background:var(--accent);color:#071326;border-radius:10px;padding:8px 12px}h1{font-size:1.35rem;margin:20px 0 8px}p,small{color:var(--muted);line-height:1.5}label{display:block;margin:18px 0 6px;font-weight:700;font-size:.9rem}input,button{font:inherit;width:100%;padding:12px;border-radius:9px;border:1px solid var(--border);margin-top:8px}input{background:var(--bg);color:var(--text)}button{border:0;background:var(--accent);color:#071326;font-weight:800;cursor:pointer}.eyebrow{font-size:.72rem;color:var(--muted);font-weight:800;letter-spacing:.1em;text-align:right}.note{font-size:.82rem;margin-top:18px}.modal-backdrop[hidden]{display:none!important}.modal-backdrop{position:fixed;inset:0;z-index:9999;background:#0009;display:flex;align-items:center;justify-content:center;padding:18px}.modal{background:var(--panel);border:1px solid var(--border);border-radius:14px;padding:20px;width:min(100%,400px)}.modal h2{font-size:1.1rem}.modal-actions{display:flex;justify-content:flex-end;margin-top:16px}.modal-actions button{width:auto;min-width:90px}</style></head>
+<body><main class="card"><div class="top"><div class="mark">L</div><div class="eyebrow">LOCAL DEVICE ADMINISTRATION</div></div><h1>Locus Administrator</h1><p>Sign in to manage this ESP32 node, view diagnostics, and update firmware.</p><form id="loginForm"><label for="username">Username</label><input id="username" name="username" type="text" value="admin" autocomplete="username" readonly><label for="password">Administrator password</label><input id="password" name="password" type="password" minlength="8" maxlength="64" autocomplete="current-password" required autofocus><button type="submit">Sign in</button></form><p class="note">There is no web password-reset option. If you changed and lost the password, local device recovery may be required.</p></main>
+<div id="appModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal"><h2 id="modalTitle">Locus</h2><p id="modalMessage"></p><div class="modal-actions"><button id="modalOk" type="button">OK</button></div></div></div>
+<script>
+const $=id=>document.getElementById(id);const SETTINGS_KEY='locus.settings';function readSettings(){try{const s=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}');return s&&typeof s==='object'?s:{}}catch(e){return {}}}function currentTheme(){return readSettings().theme==='light'?'light':'dark'}function applySharedTheme(){document.body.classList.toggle('light',currentTheme()==='light')}applySharedTheme();window.addEventListener('storage',e=>{if(e.key===SETTINGS_KEY)applySharedTheme()});function modal(title,message){return new Promise(resolve=>{const overlay=$('appModal');$('modalTitle').textContent=title;$('modalMessage').textContent=message;overlay.hidden=false;const finish=()=>{overlay.hidden=true;$('modalOk').removeEventListener('click',finish);document.removeEventListener('keydown',key);resolve()};const key=e=>{if(e.key==='Escape'||e.key==='Enter')finish()};$('modalOk').addEventListener('click',finish);document.addEventListener('keydown',key);$('modalOk').focus()})}
+$('loginForm').addEventListener('submit',async e=>{e.preventDefault();const btn=$('loginForm').querySelector('button');btn.disabled=true;try{const body=new URLSearchParams({username:$('username').value,password:$('password').value});const r=await fetch('/admin/login',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body,cache:'no-store',credentials:'same-origin'});if(!r.ok)throw new Error(await r.text());window.location.replace('/admin')}catch(err){await modal('Sign-in failed',err.message||'Could not sign in.');$('password').select()}finally{btn.disabled=false}});
+const params=new URLSearchParams(location.search);if(params.has('changed'))modal('Password changed','Sign in with your new administrator password.');else if(params.has('logout'))modal('Signed out','Your Locus administrator session has ended.');
+</script></body></html>
+)login";
+
+const char ADMIN_PAGE[] PROGMEM = R"admin(
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><title>Locus Admin Console</title>
+<style>
+:root{color-scheme:dark;--bg:#0b1220;--panel:#121d30;--panel2:#17253b;--text:#e8eef8;--muted:#9baec7;--border:#293b55;--accent:#70a5ff;--good:#34d399;--warn:#fbbf24;--bad:#fb7185;--shadow:#0005}
+body.light{color-scheme:light;--bg:#f2f5fa;--panel:#fff;--panel2:#f8fafc;--text:#172033;--muted:#667085;--border:#dce4ef;--accent:#175cd3;--good:#079455;--warn:#b54708;--bad:#d92d20;--shadow:#0001}
+*{box-sizing:border-box}body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;margin:0;background:var(--bg);color:var(--text);transition:background .15s,color .15s}.wrap{max-width:1100px;margin:0 auto;padding:20px}.top{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:18px}.brand{display:flex;align-items:center;gap:12px}.mark{width:46px;height:46px;display:grid;place-items:center;border-radius:13px;background:var(--accent);color:#071326;font-size:1.35rem;font-weight:900}.brand h1{font-size:1.35rem;margin:0}.sub{font-size:.88rem;color:var(--muted);margin-top:3px}.actions{display:flex;gap:8px;flex-wrap:wrap}.btn,button{font:inherit;border:1px solid var(--border);border-radius:9px;padding:10px 13px;background:var(--panel2);color:var(--text);cursor:pointer;font-weight:650}.btn.primary,button.primary{background:var(--accent);color:#071326;border-color:transparent}.btn.danger,button.danger{color:white;background:#c93652;border-color:transparent}.btn:hover,button:hover{filter:brightness(1.08)}a{color:var(--accent)}.banner{background:var(--panel);border:1px solid var(--border);padding:13px 15px;border-radius:12px;color:var(--muted);margin-bottom:16px}.banner strong{color:var(--text)}.section-title{margin:24px 0 10px;font-size:1.03rem}.grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}.stat,.panel{background:var(--panel);border:1px solid var(--border);border-radius:13px;padding:15px;min-width:0;box-shadow:0 4px 14px var(--shadow)}.stat .k{color:var(--muted);font-size:.8rem}.stat .v{font-size:1.35rem;font-weight:750;overflow-wrap:anywhere;margin-top:7px}.stat .hint{color:var(--muted);font-size:.76rem;margin-top:5px}.layout{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}.panel h3{margin:0 0 12px;font-size:1rem}.kv{display:grid;grid-template-columns:minmax(120px,.7fr) minmax(0,1.3fr);gap:9px;border-bottom:1px solid var(--border);padding:8px 0;font-size:.88rem}.kv:last-child{border-bottom:0}.kv span:first-child{color:var(--muted)}.kv span:last-child{overflow-wrap:anywhere;text-align:right}.table-wrap{overflow:auto}table{border-collapse:collapse;width:100%;font-size:.85rem;min-width:480px}th,td{text-align:left;padding:10px 8px;border-bottom:1px solid var(--border)}th{color:var(--muted);font-weight:650}td{overflow-wrap:anywhere}.pill{display:inline-block;border-radius:20px;padding:3px 8px;font-size:.75rem;font-weight:700;background:var(--panel2);border:1px solid var(--border)}.pill.good{color:var(--good)}.pill.warn{color:var(--warn)}.pill.bad{color:var(--bad)}.form-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}.field{margin-bottom:10px}label{display:block;font-size:.84rem;font-weight:650;margin-bottom:6px}input{font:inherit;width:100%;padding:11px;border-radius:8px;border:1px solid var(--border);background:var(--bg);color:var(--text)}input:focus{outline:2px solid var(--accent);outline-offset:1px}.note{color:var(--muted);font-size:.8rem;line-height:1.5}.status{margin-top:10px;font-size:.85rem;min-height:1.3em}.status.good{color:var(--good)}.status.bad{color:var(--bad)}.panel-actions{display:flex;gap:8px;flex-wrap:wrap}.panel-actions button{width:auto}.progressline{height:5px;background:var(--border);border-radius:10px;overflow:hidden;margin-top:10px}.progressline div{height:100%;width:0;background:var(--accent)}footer{color:var(--muted);font-size:.8rem;padding:20px 2px 6px}.danger-note{border-left:3px solid var(--warn);padding:9px 11px;background:var(--panel2);color:var(--muted);font-size:.8rem;margin-top:12px;border-radius:4px}
+.modal-backdrop[hidden]{display:none!important}.modal-backdrop{position:fixed;inset:0;z-index:9999;background:#0009;display:flex;align-items:center;justify-content:center;padding:18px}.modal-card{width:min(100%,430px);background:var(--panel);color:var(--text);border:1px solid var(--border);border-radius:15px;padding:20px;box-shadow:0 20px 55px #0005}.modal-card h2{font-size:1.1rem;margin:0 0 10px}.modal-card p{font-size:.92rem;line-height:1.5;color:var(--muted);white-space:pre-wrap}.modal-actions{display:flex;justify-content:flex-end;gap:8px;flex-wrap:wrap;margin-top:18px}.modal-actions button{width:auto;min-width:90px}.modal-actions .modal-cancel{background:var(--panel2)}
+@media(max-width:850px){.grid{grid-template-columns:repeat(2,minmax(0,1fr))}.layout{grid-template-columns:1fr}}
+@media(max-width:520px){.wrap{padding:12px}.grid{grid-template-columns:1fr 1fr;gap:7px}.stat{padding:11px}.stat .v{font-size:1.12rem}.form-grid{grid-template-columns:1fr}.kv{grid-template-columns:1fr;gap:3px}.kv span:last-child{text-align:left}.brand h1{font-size:1.15rem}}
+</style></head>
+<body><div class="wrap">
+<header class="top"><div class="brand"><div class="mark">L</div><div><h1>Locus Admin Console</h1><div class="sub">Embedded node maintenance and diagnostics</div></div></div><div class="actions"><button id="refreshBtn" type="button">↻ Refresh</button><button id="openOtaBtn" class="btn primary" type="button">Firmware OTA →</button><button id="openChatBtn" class="btn" type="button">Open chat</button><button id="logoutBtn" class="danger" type="button">Log out</button></div></header>
+<div class="banner"><strong>Connected node:</strong> <span id="identityLine">__MAC__ · __LABEL_TEXT__</span><br>Live diagnostics refresh automatically every 3 seconds. Changes made here affect this ESP32 node only.</div>
+<h2 class="section-title">Live overview</h2>
+<div class="grid">
+ <div class="stat"><div class="k">Uptime</div><div class="v" id="uptime">Loading…</div><div class="hint">Since last reboot</div></div>
+ <div class="stat"><div class="k">Connected phones</div><div class="v" id="phones">—</div><div class="hint">Wi-Fi clients connected to this node</div></div>
+ <div class="stat"><div class="k">Known mesh nodes</div><div class="v" id="nodeCount">—</div><div class="hint">Including this node</div></div>
+ <div class="stat"><div class="k">Free heap</div><div class="v" id="heap">—</div><div class="hint" id="heapHint">Current free RAM</div></div>
+</div>
+<h2 class="section-title">Device and network details</h2>
+<div class="layout">
+ <section class="panel"><h3>Device information</h3>
+  <div class="kv"><span>Node MAC</span><span id="mac">__MAC__</span></div>
+  <div class="kv"><span>Location label</span><span id="currentLabel">__LABEL_TEXT__</span></div>
+  <div class="kv"><span>Chip</span><span id="chip">—</span></div>
+  <div class="kv"><span>CPU frequency</span><span id="cpu">—</span></div>
+  <div class="kv"><span>Flash capacity</span><span id="flash">—</span></div>
+  <div class="kv"><span>Firmware size</span><span id="firmwareSize">—</span></div>
+  <div class="kv"><span>OTA app partition capacity</span><span id="otaSpace">—</span></div>
+  <div class="kv"><span>Locus build</span><span id="locusBuild">—</span></div>
+  <div class="kv"><span>Arduino core / ESP-IDF</span><span id="sdk">—</span></div>
+  <div class="kv"><span>Last reset reason</span><span id="resetReason">—</span></div>
+ </section>
+ <section class="panel"><h3>Radio and battery</h3>
+  <div class="kv"><span>Access point IP</span><span id="apIp">—</span></div>
+  <div class="kv"><span>Wi-Fi channel</span><span id="channel">—</span></div>
+  <div class="kv"><span>AP clients</span><span id="apClients">—</span></div>
+  <div class="kv"><span>Battery status</span><span id="batteryStatus">—</span></div>
+  <div class="kv"><span>Battery voltage</span><span id="batteryVoltage">—</span></div>
+  <div class="kv"><span>Battery estimate</span><span id="batteryPercent">—</span></div>
+  <div class="kv"><span>Minimum free heap</span><span id="minHeap">—</span></div>
+  <div class="kv"><span>Receive queue depth</span><span id="queueDepth">—</span></div>
+  <p class="note">Battery percentage is an estimate from the configured voltage lookup table. Calibrate it against your actual battery chemistry before relying on it.</p>
+ </section>
+</div>
+<h2 class="section-title">ESP-NOW diagnostics</h2>
+<div class="grid">
+ <div class="stat"><div class="k">Packets received</div><div class="v" id="rx">—</div></div>
+ <div class="stat"><div class="k">Packets processed</div><div class="v" id="processed">—</div></div>
+ <div class="stat"><div class="k">Successful sends</div><div class="v" id="txOk">—</div></div>
+ <div class="stat"><div class="k">Send failures</div><div class="v" id="txFail">—</div></div>
+ <div class="stat"><div class="k">Invalid packet lengths</div><div class="v" id="badLen">—</div></div>
+ <div class="stat"><div class="k">RX queue overflow</div><div class="v" id="queueFull">—</div></div>
+ <div class="stat"><div class="k">Last packet length</div><div class="v" id="lastLen">—</div></div>
+ <div class="stat"><div class="k">Last RSSI</div><div class="v" id="lastRssi">—</div></div>
+</div>
+<section class="panel" style="margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3 style="margin:0">Connected phone / browser devices</h3><span class="pill" id="clientHealth">Waiting for data</span></div>
+ <div class="table-wrap"><table><thead><tr><th>Client MAC</th><th>Access point signal</th></tr></thead><tbody id="clientTable"><tr><td colspan="2">Loading connected clients…</td></tr></tbody></table></div>
+ <p class="note">The ESP32 can report connected client MAC addresses and their Wi-Fi RSSI. It cannot identify a person's name from this radio data.</p>
+</section>
+<section class="panel" style="margin-top:12px"><div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap"><h3 style="margin:0">Discovered mesh nodes</h3><span class="pill" id="meshHealth">Waiting for data</span></div>
+ <div class="table-wrap"><table><thead><tr><th>Node MAC</th><th>Path</th><th>Signal</th><th>Last seen</th></tr></thead><tbody id="meshTable"><tr><td colspan="4">Loading node table…</td></tr></tbody></table></div>
+ <div class="panel-actions" style="margin-top:12px"><button id="testPacketBtn" class="primary" type="button">Send mesh test packet</button><button id="rebootBtn" class="danger" type="button">Reboot this node</button></div>
+ <div id="diagStatus" class="status" role="status"></div><p class="note">A test packet is a normal diagnostic broadcast, not an SOS. A reboot temporarily disconnects phones using this node.</p>
+</section>
+<h2 class="section-title">Node configuration</h2>
+<div class="layout">
+ <section class="panel"><h3>Location label</h3><form id="labelForm"><div class="field"><label for="label">Installation location</label><input id="label" name="label" maxlength="48" value="__LABEL_ATTR__" required placeholder="e.g. Engineering Building - Floor 2"></div><button class="primary" type="submit">Save location label</button><div id="labelStatus" class="status" role="status"></div></form><p class="note">The label is stored in this node's NVS preferences and is used by physical-button SOS alerts.</p></section>
+ <section class="panel"><h3>Change administrator password</h3><form id="passwordForm" autocomplete="off"><div class="field"><label for="currentPassword">Current password</label><input id="currentPassword" name="currentPassword" type="password" minlength="8" maxlength="64" required autocomplete="current-password"></div><div class="field"><label for="newPassword">New password</label><input id="newPassword" name="newPassword" type="password" minlength="8" maxlength="64" required autocomplete="new-password"></div><div class="field"><label for="confirmPassword">Confirm new password</label><input id="confirmPassword" name="confirmPassword" type="password" minlength="8" maxlength="64" required autocomplete="new-password"></div><button class="primary" type="submit">Change password</button><div id="passwordStatus" class="status" role="status"></div></form><div class="danger-note">There is intentionally no web-based password reset. Keep the new password somewhere safe. The updater and admin console use the same password.</div></section>
+</div>
+<h2 class="section-title">Firmware maintenance</h2>
+<section class="panel"><h3>Over-the-air update</h3><p class="note">Compile the sketch for the classic ESP32 and export its compiled <code>.bin</code> file. Upload it through the OTA page. The firmware must fit an OTA-capable partition layout.</p><div class="panel-actions"><button class="btn primary" id="openOtaPanelBtn" type="button">Open OTA firmware updater →</button></div><div class="danger-note">Keep the node powered during an update. The access point is open and this prototype uses session cookies over plain HTTP. Credentials and session traffic are not encrypted, so do not use these controls on an untrusted network.</div></section>
+<footer>Locus local administration · <span id="lastUpdated">Waiting for first update…</span></footer>
+</div>
+<div id="appModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalTitle" aria-describedby="modalMessage"><div class="modal-card"><h2 id="modalTitle">Locus</h2><p id="modalMessage"></p><div class="modal-actions"><button id="modalCancel" class="modal-cancel" type="button">Cancel</button><button id="modalOk" class="primary" type="button">OK</button></div></div></div>
+<script>
+const $=id=>document.getElementById(id);
+const SETTINGS_KEY='locus.settings';
+function readSettings(){try{const v=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}');return v&&typeof v==='object'?v:{}}catch(e){return {}}}
+function currentTheme(){return readSettings().theme==='light'?'light':'dark'}
+function applySharedTheme(){document.body.classList.toggle('light',currentTheme()==='light')}
+applySharedTheme();
+window.addEventListener('storage',e=>{if(e.key===SETTINGS_KEY)applySharedTheme()});
+$('openOtaBtn').addEventListener('click',()=>{window.location.href='/ota'});
+$('openOtaPanelBtn').addEventListener('click',()=>{window.location.href='/ota'});
+$('openChatBtn').addEventListener('click',()=>{window.location.href='/'});
+function txt(id,value){$(id).textContent=value===undefined||value===null?'—':String(value)}
+function num(n){return Number(n||0).toLocaleString()}
+function bytes(n){n=Number(n||0);if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(2)+' MB'}
+function duration(ms){ms=Math.max(0,Number(ms)||0);const d=Math.floor(ms/86400000);ms%=86400000;const h=Math.floor(ms/3600000);ms%=3600000;const m=Math.floor(ms/60000);const sec=Math.floor((ms%60000)/1000);return (d?d+'d ':'')+h+'h '+m+'m '+sec+'s'}
+function setStatus(id,msg,good){const el=$(id);el.textContent=msg;el.className='status '+(good===true?'good':good===false?'bad':'')}
+function showModal(title,message,needChoice=false,okLabel='OK'){return new Promise(resolve=>{const overlay=$('appModal');$('modalTitle').textContent=title;$('modalMessage').textContent=message;$('modalCancel').hidden=!needChoice;$('modalCancel').style.display=needChoice?'':'none';$('modalOk').textContent=okLabel;overlay.hidden=false;const finish=value=>{overlay.hidden=true;$('modalOk').removeEventListener('click',onOk);$('modalCancel').removeEventListener('click',onCancel);document.removeEventListener('keydown',onKey);resolve(value)};const onOk=()=>finish(true);const onCancel=()=>finish(false);const onKey=e=>{if(e.key==='Escape')finish(false);if(e.key==='Enter'&&e.target===overlay)finish(true)};$('modalOk').addEventListener('click',onOk);$('modalCancel').addEventListener('click',onCancel);document.addEventListener('keydown',onKey);$('modalOk').focus()})}
+async function request(url,options){const opts=Object.assign({cache:'no-store',credentials:'same-origin'},options||{});const r=await fetch(url,opts);if(r.status===401){window.location.replace('/admin/login');throw new Error('Your admin session expired. Sign in again.')}if(!r.ok)throw new Error(await r.text());return r}
+let busy=false;
+async function refresh(){if(busy)return;busy=true;try{const r=await request('/admin/status',{cache:'no-store'});const d=await r.json();txt('identityLine',d.mac+' · '+d.label);txt('mac',d.mac);txt('currentLabel',d.label);txt('uptime',duration(d.uptimeMs));txt('phones',num(d.stations));txt('apClients',num(d.stations));const clients=Array.isArray(d.clients)?d.clients:[];$('clientTable').innerHTML=clients.length?clients.map(c=>'<tr><td>'+String(c.mac)+'</td><td>'+c.rssi+' dBm</td></tr>').join(''):'<tr><td colspan="2">No phones or browser clients currently connected.</td></tr>';const clientHealth=$('clientHealth');clientHealth.textContent=clients.length+' connected client'+(clients.length===1?'':'s');clientHealth.className='pill '+(clients.length?'good':'warn');txt('nodeCount',num(d.meshCount+1));txt('heap',bytes(d.freeHeap));txt('heapHint','Minimum observed: '+bytes(d.minFreeHeap));txt('chip',d.chip+' · revision '+d.chipRev);txt('cpu',d.cpuMHz+' MHz');txt('flash',bytes(d.flashBytes));txt('firmwareSize',bytes(d.sketchBytes));txt('otaSpace',bytes(d.freeSketchBytes));txt('locusBuild',d.locusBuild);txt('sdk',d.coreVersion+' / '+d.sdk);txt('resetReason',d.resetReason);txt('apIp',d.apIp);txt('channel',d.channel);txt('minHeap',bytes(d.minFreeHeap));txt('queueDepth',d.queueDepth);txt('rx',num(d.rx));txt('processed',num(d.processed));txt('txOk',num(d.txOk));txt('txFail',num(d.txFail));txt('badLen',num(d.badLen));txt('queueFull',num(d.queueFull));txt('lastLen',d.lastLen);txt('lastRssi',d.lastRssi===null?'Unavailable':d.lastRssi+' dBm');const b=d.battery||{};txt('batteryStatus',b.s==='ok'?'Available':b.s==='none'?'No battery detected':b.s==='off'?'Disabled':'Invalid ADC pin');txt('batteryVoltage',b.s==='ok'?Number(b.v).toFixed(2)+' V':'—');txt('batteryPercent',b.s==='ok'?b.pct+'%':'—');const mesh=Array.isArray(d.mesh)?d.mesh:[];$('meshTable').innerHTML=mesh.length?mesh.map(n=>'<tr><td>'+String(n.mac)+'</td><td>'+(Number(n.hops)<=1?'Direct':Number(n.hops)+' hops')+'</td><td>'+(n.rssi===null?'—':n.rssi+' dBm')+'</td><td>'+n.age+' s ago</td></tr>').join(''):'<tr><td colspan="4">No other mesh nodes heard recently.</td></tr>';const health=$('meshHealth');health.textContent=mesh.length?'Mesh peers: '+mesh.length:'No peer nodes';health.className='pill '+(mesh.length?'good':'warn');txt('lastUpdated','Updated '+new Date().toLocaleTimeString());if(!$('label').dataset.edited)$('label').value=d.label}catch(e){txt('lastUpdated','Unable to refresh: '+e.message)}finally{busy=false}}
+$('refreshBtn').addEventListener('click',refresh);refresh();setInterval(refresh,5000);
+$('label').addEventListener('input',()=>$('label').dataset.edited='1');
+$('labelForm').addEventListener('submit',async e=>{e.preventDefault();setStatus('labelStatus','Saving…');try{const body=new URLSearchParams({label:$('label').value});const r=await request('/admin/config',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const msg=await r.text();setStatus('labelStatus',msg,true);delete $('label').dataset.edited;await showModal('Location saved',msg);refresh()}catch(err){setStatus('labelStatus',err.message,false);await showModal('Unable to save location',err.message)}});
+$('passwordForm').addEventListener('submit',async e=>{e.preventDefault();const old=$('currentPassword').value;const next=$('newPassword').value;const confirmValue=$('confirmPassword').value;if(next.length<8||next.length>64){await showModal('Password not changed','Use a password from 8 to 64 characters.');return}if(next!==confirmValue){await showModal('Passwords do not match','Enter the same new password in both fields.');return}if(old===next){await showModal('Choose another password','The new password must differ from the current password.');return}const yes=await showModal('Change administrator password?','The new password will protect both this admin console and the OTA updater. You will be signed out after it is saved.',true,'Change password');if(!yes)return;setStatus('passwordStatus','Changing password…');try{const body=new URLSearchParams({currentPassword:old,newPassword:next,confirmPassword:confirmValue});const r=await request('/admin/password',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body});const msg=await r.text();$('passwordForm').reset();setStatus('passwordStatus',msg,true);await showModal('Password changed',msg+' You will now return to the login screen.');window.location.replace('/admin/login?changed=1')}catch(err){setStatus('passwordStatus',err.message,false);await showModal('Password change failed',err.message)}});
+$('testPacketBtn').addEventListener('click',async()=>{const yes=await showModal('Send mesh test packet?','This broadcasts a diagnostic message to reachable Locus nodes. It is not an SOS alert.',true,'Send test');if(!yes)return;setStatus('diagStatus','Sending test packet…');try{const r=await request('/admin/test',{method:'POST'});const msg=await r.text();setStatus('diagStatus',msg,true);await showModal('Diagnostic packet',msg);setTimeout(refresh,1000)}catch(e){setStatus('diagStatus',e.message,false);await showModal('Test packet failed',e.message)}});
+$('rebootBtn').addEventListener('click',async()=>{const yes=await showModal('Reboot this node?','Phones connected to this ESP32 will disconnect temporarily. Reconnect after the access point returns.',true,'Reboot');if(!yes)return;setStatus('diagStatus','Requesting reboot…');try{const r=await request('/admin/reboot',{method:'POST'});const msg=await r.text();setStatus('diagStatus',msg,true);await showModal('Node rebooting',msg)}catch(e){setStatus('diagStatus',e.message,false);await showModal('Reboot request',e.message)}});
+$('logoutBtn').addEventListener('click',async()=>{const yes=await showModal('Log out of Locus Admin?','Your admin session on this browser will be ended.',true,'Log out');if(!yes)return;try{await fetch('/admin/logout',{method:'POST',cache:'no-store',credentials:'same-origin'});window.location.replace('/admin/login?logout=1')}catch(e){await showModal('Could not log out',e.message)}});
+</script></body></html>
+)admin";
+const char OTA_PAGE[] PROGMEM = R"ota(
+<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="color-scheme" content="dark light"><meta http-equiv="Cache-Control" content="no-store"><title>Locus OTA Update</title>
+<style>:root{color-scheme:dark;--bg:#0b1220;--panel:#121d30;--text:#e8eef8;--muted:#9baec7;--border:#293b55;--accent:#70a5ff;--warn:#fbbf24}body.light{color-scheme:light;--bg:#f2f5fa;--panel:#fff;--text:#172033;--muted:#667085;--border:#dce4ef;--accent:#175cd3;--warn:#b54708}*{box-sizing:border-box}body{font-family:system-ui,-apple-system,"Segoe UI",sans-serif;max-width:650px;margin:0 auto;padding:18px;background:var(--bg);color:var(--text)}main{margin-top:20px;background:var(--panel);padding:22px;border:1px solid var(--border);border-radius:14px}h1{font-size:1.45rem}p,small{color:var(--muted);line-height:1.5}input,button{font:inherit;box-sizing:border-box;width:100%;padding:12px;margin:8px 0;border-radius:8px;border:1px solid var(--border)}input{background:var(--bg);color:var(--text)}button{background:var(--accent);color:#071326;border:0;font-weight:750;cursor:pointer}.top{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.top button{width:auto;padding:8px 11px}.warn{padding:12px;border-left:3px solid var(--warn);background:var(--bg);border-radius:4px}a{color:var(--accent)}.actions{display:flex;gap:8px;flex-wrap:wrap}.modal-backdrop[hidden]{display:none!important}.modal-backdrop{position:fixed;inset:0;z-index:9999;background:#0009;display:flex;align-items:center;justify-content:center;padding:18px}.modal-card{width:min(100%,430px);background:var(--panel);border:1px solid var(--border);border-radius:15px;padding:20px;box-shadow:0 20px 55px #0005}.modal-card h2{font-size:1.1rem;margin:0 0 10px}.modal-card p{color:var(--muted);line-height:1.5}.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:18px}.modal-actions button{width:auto;min-width:90px}.modal-cancel{background:var(--panel);color:var(--text);border:1px solid var(--border)}</style></head>
+<body><div class="top"><button id="backAdminBtn" type="button">← Admin dashboard</button><div class="actions"><button id="logoutBtn" type="button">Log out</button></div></div><main><h1>Locus OTA Firmware Update</h1><p>Upload a compiled <code>.bin</code> file for a classic ESP32 with an OTA-capable partition layout.</p><form id="otaForm" method="POST" action="/update" enctype="multipart/form-data"><label for="firmware">Compiled firmware (.bin)</label><input id="firmware" type="file" name="firmware" accept=".bin,application/octet-stream" required><button id="uploadBtn" type="submit">Upload and Install Firmware</button></form><div id="uploadState" role="status"></div><p class="warn">Keep the node powered throughout the update. Do not disconnect while uploading. The node will restart after a successful update.</p><small>Use only firmware compiled for this classic ESP32 model and compatible OTA partition layout.</small></main>
+<div id="appModal" class="modal-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="modalTitle"><div class="modal-card"><h2 id="modalTitle">Locus</h2><p id="modalMessage"></p><div class="modal-actions"><button id="modalCancel" class="modal-cancel" type="button">Cancel</button><button id="modalOk" type="button">OK</button></div></div></div>
+<script>
+const $=id=>document.getElementById(id);const SETTINGS_KEY='locus.settings';
+function readSettings(){try{const v=JSON.parse(localStorage.getItem(SETTINGS_KEY)||'{}');return v&&typeof v==='object'?v:{}}catch(e){return {}}}
+function currentTheme(){return readSettings().theme==='light'?'light':'dark'}
+function applySharedTheme(){document.body.classList.toggle('light',currentTheme()==='light')}
+applySharedTheme();
+window.addEventListener('storage',e=>{if(e.key===SETTINGS_KEY)applySharedTheme()});
+$('backAdminBtn').addEventListener('click',()=>{window.location.href='/admin'});
+function showModal(title,message,needChoice=false,okLabel='OK'){return new Promise(resolve=>{const overlay=$('appModal');$('modalTitle').textContent=title;$('modalMessage').textContent=message;$('modalCancel').hidden=!needChoice;$('modalCancel').style.display=needChoice?'':'none';$('modalOk').textContent=okLabel;overlay.hidden=false;const finish=v=>{overlay.hidden=true;$('modalOk').removeEventListener('click',onOk);$('modalCancel').removeEventListener('click',onCancel);document.removeEventListener('keydown',onKey);resolve(v)};const onOk=()=>finish(true),onCancel=()=>finish(false),onKey=e=>{if(e.key==='Escape')finish(false)};$('modalOk').addEventListener('click',onOk);$('modalCancel').addEventListener('click',onCancel);document.addEventListener('keydown',onKey);$('modalOk').focus()})}
+$('otaForm').addEventListener('submit',async e=>{if($('otaForm').dataset.approved==='1')return;e.preventDefault();const file=$('firmware').files&&$('firmware').files[0];if(!file){await showModal('Choose firmware','Select a compiled .bin file first.');return}if(!file.name.toLowerCase().endsWith('.bin')){await showModal('Unsupported file','Please select a compiled .bin firmware file.');return}const yes=await showModal('Install this firmware?','File: '+file.name+'\nSize: '+file.size.toLocaleString()+' bytes\n\nThe node will restart after a successful update. Keep it powered throughout.',true,'Upload firmware');if(yes){$('otaForm').dataset.approved='1';$('uploadState').textContent='Uploading firmware… do not close this page.';$('uploadBtn').disabled=true;$('otaForm').submit()}});
+$('logoutBtn').addEventListener('click',async()=>{const yes=await showModal('Log out of Locus Admin?','Your admin session on this browser will be ended.',true,'Log out');if(!yes)return;try{await fetch('/admin/logout',{method:'POST',cache:'no-store',credentials:'same-origin'});window.location.replace('/admin/login?logout=1')}catch(e){await showModal('Could not log out',e.message)}});
+</script></body></html>
+)ota";
 
 void safeDelay(uint32_t ms) {
   uint32_t start = millis();
@@ -1180,6 +1496,49 @@ bool checkRateLimit(uint32_t ip) {
     }
   }
   return false;
+}
+
+bool emergencyCooldownActive(uint32_t ip, uint32_t &secondsRemaining) {
+  const uint32_t now = millis();
+  secondsRemaining = 0;
+  for (size_t i = 0; i < 16; i++) {
+    EmergencyRateEntry &entry = emergencyRateLimits[i];
+    if (entry.valid && entry.ip == ip) {
+      uint32_t elapsed = now - entry.lastAt;
+      if (elapsed < EMERGENCY_COOLDOWN_MS) {
+        secondsRemaining = (EMERGENCY_COOLDOWN_MS - elapsed + 999) / 1000;
+        return true;
+      }
+      return false;
+    }
+  }
+  return false;
+}
+
+void rememberEmergencySent(uint32_t ip) {
+  const uint32_t now = millis();
+  int slot = -1;
+  uint32_t oldestAge = 0;
+  for (size_t i = 0; i < 16; i++) {
+    if (emergencyRateLimits[i].valid && emergencyRateLimits[i].ip == ip) {
+      slot = (int)i;
+      break;
+    }
+    if (!emergencyRateLimits[i].valid) {
+      slot = (int)i;
+      break;
+    }
+    uint32_t age = now - emergencyRateLimits[i].lastAt;
+    if (age >= oldestAge) {
+      oldestAge = age;
+      slot = (int)i;
+    }
+  }
+  if (slot >= 0) {
+    emergencyRateLimits[slot].ip = ip;
+    emergencyRateLimits[slot].lastAt = now;
+    emergencyRateLimits[slot].valid = true;
+  }
 }
 
 void clearLiveEvents() {
@@ -1387,9 +1746,9 @@ String clientIdentity() {
 bool deriveKeys(const String &secret, uint8_t aesKey[32], uint8_t channelId[8]) {
   if (secret.length() == 0) return false;
   uint8_t digest[32];
-  String keyMaterial = "OGEMTN-AES-v1:" + secret;
+  String keyMaterial = "Locus-AES-v1:" + secret;
   if (!sha256Raw(keyMaterial, aesKey)) return false;
-  String channelMaterial = "OGEMTN-Channel-v1:" + secret;
+  String channelMaterial = "Locus-Channel-v1:" + secret;
   if (!sha256Raw(channelMaterial, digest)) {
     memset(aesKey, 0, 32);
     return false;
@@ -1697,10 +2056,28 @@ void cancelPendingAck(const uint8_t *target, uint32_t sequence) {
   }
 }
 
+void triggerBuzzer(uint32_t durationMs) {
+  buzzerActive = true;
+  buzzerStopTime = millis() + durationMs;
+  digitalWrite(BUZZER_PIN, HIGH);
+}
+
+bool isUrgentEmergencyText(const char *message) {
+  bool safeStatus = strstr(message, "CLEAR / SAFE HERE") != nullptr ||
+                    strstr(message, "SAFE & FULLY ACCOUNTED") != nullptr;
+  if (safeStatus) return false;
+  return strstr(message, "[SOS]") != nullptr ||
+         strstr(message, "[EMERGENCY BUTTON]") != nullptr ||
+         strstr(message, "NEED MEDICAL ASSISTANCE") != nullptr ||
+         strstr(message, "TRAPPED / CANNOT EVACUATE") != nullptr ||
+         strstr(message, "NEED RESCUE") != nullptr ||
+         strstr(message, "HARDWARE SOS") != nullptr;
+}
+
 void processPacket(MeshPacket &packet, const RxItem &rx) {
   if (packet.magic != PACKET_MAGIC || packet.version != 1) return;
   if (packet.type != PUBLIC_MESSAGE && packet.type != PRIVATE_MESSAGE && packet.type != PRESENCE_MESSAGE &&
-      packet.type != ACK_MESSAGE && packet.type != GROUP_PRESENCE_MESSAGE) return;
+      packet.type != ACK_MESSAGE && packet.type != GROUP_PRESENCE_MESSAGE && packet.type != EMERGENCY_MESSAGE) return;
   if (packet.type != PRESENCE_MESSAGE && packet.length == 0) return;
   if (packet.length > MAX_TEXT || packet.hops == 0) return;
   if (seenBeforeAndRemember(packet)) return;
@@ -1723,11 +2100,13 @@ void processPacket(MeshPacket &packet, const RxItem &rx) {
     }
   }
   String origin = hashId(packet.origin);
-  if (packet.type == PUBLIC_MESSAGE) {
+  if (packet.type == PUBLIC_MESSAGE || packet.type == EMERGENCY_MESSAGE) {
     char message[128] = {};
     memcpy(message, packet.payload, packet.length);
     message[packet.length] = '\0';
     publishLive(String(message), "public", "", origin);
+    if ((packet.type == EMERGENCY_MESSAGE && isUrgentEmergencyText(message)) ||
+        (packet.type == PUBLIC_MESSAGE && isUrgentEmergencyText(message))) triggerBuzzer(5000);
     scheduleAck(packet.origin, packet.sequence, packet.hops);
   } else if (packet.type == PRIVATE_MESSAGE) {
     uint8_t plaintext[129] = {};
@@ -1781,7 +2160,10 @@ void receiveCallback(const uint8_t *macAddr, const uint8_t *data, int length) {
 #else
   memcpy(item.src, macAddr, 6);
 #endif
-  if (xQueueSend(rxQueue, &item, 0) != pdTRUE) statRxQueueFull++;
+  BaseType_t queued;
+  if (item.packet.type == EMERGENCY_MESSAGE) queued = xQueueSendToFront(rxQueue, &item, 0);
+  else queued = xQueueSend(rxQueue, &item, 0);
+  if (queued != pdTRUE) statRxQueueFull++;
 }
 
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
@@ -1793,15 +2175,21 @@ void sendCallback(const uint8_t *macAddr, uint8_t status) {
   else statTxFail++;
 }
 
+void sendNoCacheHeaders() {
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
+  server.sendHeader("Expires", "0");
+}
+
 void handleHome() {
+  sendNoCacheHeaders();
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Cache-Control", "no-store");
   server.send_P(200, "text/html; charset=utf-8", PAGE);
 }
 
 void handleEvents() {
+  sendNoCacheHeaders();
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Cache-Control", "no-store");
   long requested = server.hasArg("cursor") ? server.arg("cursor").toInt() : 0;
   uint32_t ackSeen = server.hasArg("av") ? (uint32_t)server.arg("av").toInt() : 0;
   uint32_t nodeCount = getActiveNodesCount();
@@ -1826,8 +2214,8 @@ void handleEvents() {
       last = first + EVENTS_PER_REPLY - 1;
     }
     uint32_t replyCursor = (requested < 0 || first > current) ? current : last;
-    json = "{\"boot\":" + String(bootId) + ",\"me\":\"" + me + "\",\"cursor\":" + String(replyCursor) +  
-           ",\"mac\":\"" + macString(nodeMac) + "\",\"nodes\":" + String(nodeCount) +  
+    json = "{\"boot\":" + String(bootId) + ",\"me\":\"" + me + "\",\"cursor\":" + String(replyCursor) +
+           ",\"mac\":\"" + macString(nodeMac) + "\",\"label\":\"" + jsonEscape(nodeLocationLabel.c_str()) + "\",\"nodes\":" + String(nodeCount) +
            ",\"pub\":" + String(pubListeners) + ",\"events\":[";
 
     bool firstItem = true;  
@@ -1858,6 +2246,404 @@ void handleEvents() {
   server.send(200, "application/json; charset=utf-8", json);
 }
 
+String htmlEscape(const String &input) {
+  String out;
+  out.reserve(input.length() + 8);
+  for (size_t i = 0; i < input.length(); i++) {
+    char c = input[i];
+    if (c == '&') out += "&amp;";
+    else if (c == '<') out += "&lt;";
+    else if (c == '>') out += "&gt;";
+    else if (c == '\"') out += "&quot;";
+    else if (c == '\'') out += "&#39;";
+    else out += c;
+  }
+  return out;
+}
+
+String currentAdminPassword() {
+  String configured = nodePreferences.getString("adminPass", ADMIN_PIN);
+  if (configured.length() < 8 || configured.length() > 64) return String(ADMIN_PIN);
+  return configured;
+}
+
+String requestAdminToken() {
+  String cookies = server.header("Cookie");
+  const String marker = "LocusSession=";
+  int start = cookies.indexOf(marker);
+  if (start < 0) return String("");
+  start += marker.length();
+  int end = cookies.indexOf(';', start);
+  String token = end < 0 ? cookies.substring(start) : cookies.substring(start, end);
+  token.trim();
+  if (token.length() != 32) return String("");
+  return token;
+}
+
+int findAdminSession(const String &token) {
+  if (token.length() != 32) return -1;
+  uint32_t now = millis();
+  for (size_t i = 0; i < ADMIN_SESSION_COUNT; i++) {
+    AdminSession &session = adminSessions[i];
+    if (session.valid && (uint32_t)(now - session.lastActivity) > ADMIN_SESSION_IDLE_MS) {
+      session.valid = false;
+      session.token[0] = '\0';
+    }
+    if (session.valid && strncmp(session.token, token.c_str(), sizeof(session.token)) == 0) {
+      return (int)i;
+    }
+  }
+  return -1;
+}
+
+bool adminSessionAuthenticated() {
+  String token = requestAdminToken();
+  int slot = findAdminSession(token);
+  if (slot < 0) return false;
+  adminSessions[slot].lastActivity = millis();
+  return true;
+}
+
+void invalidateAdminSession(const String &token) {
+  int slot = findAdminSession(token);
+  if (slot >= 0) {
+    adminSessions[slot].valid = false;
+    adminSessions[slot].token[0] = '\0';
+  }
+}
+
+void invalidateAllAdminSessions() {
+  for (size_t i = 0; i < ADMIN_SESSION_COUNT; i++) {
+    adminSessions[i].valid = false;
+    adminSessions[i].token[0] = '\0';
+    adminSessions[i].lastActivity = 0;
+  }
+}
+
+String createAdminSession() {
+  uint32_t now = millis();
+  int slot = -1;
+  int oldestSlot = 0;
+  uint32_t oldestAge = 0;
+  for (size_t i = 0; i < ADMIN_SESSION_COUNT; i++) {
+    AdminSession &session = adminSessions[i];
+    if (session.valid && (uint32_t)(now - session.lastActivity) > ADMIN_SESSION_IDLE_MS) session.valid = false;
+    if (!session.valid) { slot = (int)i; break; }
+    uint32_t age = now - session.lastActivity;
+    if (age >= oldestAge) { oldestAge = age; oldestSlot = (int)i; }
+  }
+  if (slot < 0) slot = oldestSlot;
+  uint8_t randomBytes[16];
+  esp_fill_random(randomBytes, sizeof(randomBytes));
+  char token[33];
+  for (size_t i = 0; i < sizeof(randomBytes); i++) snprintf(token + i * 2, 3, "%02x", randomBytes[i]);
+  token[32] = '\0';
+  memset(&adminSessions[slot], 0, sizeof(adminSessions[slot]));
+  strncpy(adminSessions[slot].token, token, sizeof(adminSessions[slot].token) - 1);
+  adminSessions[slot].lastActivity = now;
+  adminSessions[slot].valid = true;
+  return String(token);
+}
+
+void clearAdminCookie() {
+  server.sendHeader("Set-Cookie", "LocusSession=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
+}
+
+bool requireAdminAuthentication() {
+  if (adminSessionAuthenticated()) return true;
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
+  if (server.uri() == "/admin" || server.uri() == "/ota") {
+    server.sendHeader("Location", "/admin/login", true);
+    server.send(303, "text/plain; charset=utf-8", "Sign in to Locus Admin.");
+  } else {
+    server.send(401, "text/plain; charset=utf-8", "Admin session expired. Sign in again.");
+  }
+  return false;
+}
+
+void handleAdminLoginPage() {
+  if (adminSessionAuthenticated()) {
+    server.sendHeader("Location", "/admin", true);
+    server.send(303, "text/plain", "Already signed in.");
+    return;
+  }
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.sendHeader("Pragma", "no-cache");
+  server.send_P(200, "text/html; charset=utf-8", ADMIN_LOGIN_PAGE);
+}
+
+void handleAdminLogin() {
+  String username = server.hasArg("username") ? server.arg("username") : "";
+  String supplied = server.hasArg("password") ? server.arg("password") : "";
+  String expected = currentAdminPassword();
+  if (username != OTA_USERNAME || supplied.length() != expected.length() || supplied != expected) {
+    server.sendHeader("Cache-Control", "no-store");
+    server.send(401, "text/plain; charset=utf-8", "Incorrect username or administrator password.");
+    return;
+  }
+  String token = createAdminSession();
+  server.sendHeader("Set-Cookie", "LocusSession=" + token + "; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800");
+  server.sendHeader("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0");
+  server.send(200, "application/json; charset=utf-8", "{\"ok\":true}");
+}
+
+void handleAdminLogout() {
+  invalidateAdminSession(requestAdminToken());
+  clearAdminCookie();
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/plain; charset=utf-8", "Signed out.");
+}
+
+void handleAdminPage() {
+  if (!requireAdminAuthentication()) return;
+  String page = FPSTR(ADMIN_PAGE);
+  String safeLabel = htmlEscape(nodeLocationLabel);
+  page.replace("__MAC__", macString(nodeMac));
+  page.replace("__LABEL_TEXT__", safeLabel);
+  page.replace("__LABEL_ATTR__", safeLabel);
+  sendNoCacheHeaders();
+  server.send(200, "text/html; charset=utf-8", page);
+}
+
+void handleAdminConfig() {
+  if (!requireAdminAuthentication()) return;
+  sendNoCacheHeaders();
+  String label = server.hasArg("label") ? server.arg("label") : "";
+  label.trim();
+  if (label.length() < 1 || label.length() > 48) {
+    server.send(400, "text/plain", "Label must be 1 to 48 characters.");
+    return;
+  }
+  for (size_t i = 0; i < label.length(); i++) {
+    if ((uint8_t)label[i] < 0x20) {
+      server.send(400, "text/plain", "Control characters are not allowed.");
+      return;
+    }
+  }
+  nodeLocationLabel = label;
+  nodePreferences.putString("location", nodeLocationLabel);
+  server.send(200, "text/plain; charset=utf-8", "Saved node label: " + nodeLocationLabel);
+  Serial.println("Admin updated node label: " + nodeLocationLabel);
+}
+
+void handleAdminPassword() {
+  if (!requireAdminAuthentication()) return;
+  sendNoCacheHeaders();
+  String current = server.hasArg("currentPassword") ? server.arg("currentPassword") : "";
+  String next = server.hasArg("newPassword") ? server.arg("newPassword") : "";
+  String confirm = server.hasArg("confirmPassword") ? server.arg("confirmPassword") : "";
+  String actual = currentAdminPassword();
+
+  if (current != actual) {
+    server.send(403, "text/plain; charset=utf-8", "Current password is incorrect.");
+    return;
+  }
+  if (next.length() < 8 || next.length() > 64) {
+    server.send(400, "text/plain; charset=utf-8", "New password must be 8 to 64 characters.");
+    return;
+  }
+  if (next != confirm) {
+    server.send(400, "text/plain; charset=utf-8", "New passwords do not match.");
+    return;
+  }
+  if (next == actual) {
+    server.send(400, "text/plain; charset=utf-8", "Choose a password different from the current password.");
+    return;
+  }
+  for (size_t i = 0; i < next.length(); i++) {
+    if ((uint8_t)next[i] < 0x20 || (uint8_t)next[i] == 0x7F) {
+      server.send(400, "text/plain; charset=utf-8", "Control characters are not allowed in passwords.");
+      return;
+    }
+  }
+  size_t written = nodePreferences.putString("adminPass", next);
+  if (written == 0 || nodePreferences.getString("adminPass", "") != next) {
+    server.send(500, "text/plain; charset=utf-8", "Could not save password. The old password remains active.");
+    return;
+  }
+  Serial.println("Administrator password changed through the admin console.");
+  invalidateAllAdminSessions();
+  clearAdminCookie();
+  server.sendHeader("Cache-Control", "no-store");
+  server.send(200, "text/plain; charset=utf-8", "Password changed and saved. Sign in again with the new password. The OTA updater uses the same password.");
+}
+
+String resetReasonText() {
+  esp_reset_reason_t reason = esp_reset_reason();
+  switch (reason) {
+    case ESP_RST_POWERON: return String("Power-on");
+    case ESP_RST_EXT: return String("External reset");
+    case ESP_RST_SW: return String("Software reset");
+    case ESP_RST_PANIC: return String("Exception or panic");
+    case ESP_RST_INT_WDT: return String("Interrupt watchdog");
+    case ESP_RST_TASK_WDT: return String("Task watchdog");
+    case ESP_RST_WDT: return String("Watchdog reset");
+    case ESP_RST_DEEPSLEEP: return String("Deep-sleep wake");
+    case ESP_RST_BROWNOUT: return String("Brownout / supply voltage dip");
+    case ESP_RST_SDIO: return String("SDIO reset");
+    default: return String("Other reset (code ") + String((int)reason) + ")";
+  }
+}
+
+String batteryJson();
+
+String makeAdminStatusJson() {
+  String resetReason = resetReasonText();
+  String chip = ESP.getChipModel();
+  String sdk = ESP.getSdkVersion();
+  IPAddress apIP = WiFi.softAPIP();
+  String json;
+  json.reserve(7000);
+  json = "{\"uptimeMs\":" + String((uint32_t)millis()) +
+         ",\"mac\":\"" + macString(nodeMac) +
+         "\",\"label\":\"" + jsonEscape(nodeLocationLabel.c_str()) +
+         "\",\"chip\":\"" + jsonEscape(chip.c_str()) +
+         "\",\"chipRev\":" + String(ESP.getChipRevision()) +
+         ",\"cpuMHz\":" + String(ESP.getCpuFreqMHz()) +
+         ",\"flashBytes\":" + String(ESP.getFlashChipSize()) +
+         ",\"sketchBytes\":" + String(ESP.getSketchSize()) +
+         ",\"freeSketchBytes\":" + String(ESP.getFreeSketchSpace()) +
+         ",\"freeHeap\":" + String(ESP.getFreeHeap()) +
+         ",\"minFreeHeap\":" + String(ESP.getMinFreeHeap()) +
+         ",\"locusBuild\":\"" + String(LOCUS_BUILD_NAME) +
+         "\",\"coreVersion\":\"" + String(ESP.getCoreVersion()) +
+         "\",\"sdk\":\"" + jsonEscape(sdk.c_str()) +
+         "\",\"resetReason\":\"" + jsonEscape(resetReason.c_str()) +
+         "\",\"apIp\":\"" + apIP.toString() +
+         "\",\"channel\":" + String(WiFi.channel()) +
+         ",\"stations\":" + String((uint32_t)WiFi.softAPgetStationNum()) +
+         ",\"queueDepth\":" + String(rxQueue ? (uint32_t)uxQueueMessagesWaiting(rxQueue) : 0) +
+         ",\"rx\":" + String((uint32_t)statRx) +
+         ",\"processed\":" + String((uint32_t)statProcessed) +
+         ",\"txOk\":" + String((uint32_t)statTxOk) +
+         ",\"txFail\":" + String((uint32_t)statTxFail) +
+         ",\"badLen\":" + String((uint32_t)statRxBadLen) +
+         ",\"queueFull\":" + String((uint32_t)statRxQueueFull) +
+         ",\"lastLen\":" + String((int)statLastLen) +
+         ",\"lastRssi\":";
+  if (statLastRssi == 0) json += "null";
+  else json += String((int)statLastRssi);
+  json += ",\"clients\":[";
+  wifi_sta_list_t clientList;
+  memset(&clientList, 0, sizeof(clientList));
+  bool firstClient = true;
+  if (esp_wifi_ap_get_sta_list(&clientList) == ESP_OK) {
+    for (int i = 0; i < clientList.num; i++) {
+      if (!firstClient) json += ",";
+      char clientMac[18];
+      snprintf(clientMac, sizeof(clientMac), "%02X:%02X:%02X:%02X:%02X:%02X",
+        clientList.sta[i].mac[0], clientList.sta[i].mac[1], clientList.sta[i].mac[2],
+        clientList.sta[i].mac[3], clientList.sta[i].mac[4], clientList.sta[i].mac[5]);
+      json += "{\"mac\":\"" + String(clientMac) + "\",\"rssi\":" + String((int)clientList.sta[i].rssi) + "}";
+      firstClient = false;
+    }
+  }
+  json += "],\"battery\":" + batteryJson() + ",\"meshCount\":0,\"mesh\":[";
+
+  uint32_t now = millis();
+  uint32_t meshCount = 0;
+  bool first = true;
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY)) {
+    for (size_t i = 0; i < MAX_NODES; i++) {
+      const ActiveNode &node = meshNodes[i];
+      if (node.lastSeen == 0 || now - node.lastSeen > PEER_TTL_MS) continue;
+      meshCount++;
+      if (!first) json += ",";
+      json += "{\"mac\":\"" + macString(node.mac) + "\",\"hops\":" + String((uint32_t)node.hops) + ",\"age\":" + String((uint32_t)((now - node.lastSeen) / 1000)) + ",\"rssi\":";
+      json += node.hasRssi ? String((int)node.rssi) : String("null");
+      json += "}";
+      first = false;
+    }
+    xSemaphoreGive(stateMutex);
+  }
+  json += "]}";
+  String marker = "\"meshCount\":0";
+  json.replace(marker, "\"meshCount\":" + String(meshCount));
+  return json;
+}
+
+void handleAdminStatus() {
+  if (!requireAdminAuthentication()) return;
+  sendNoCacheHeaders();
+  server.send(200, "application/json; charset=utf-8", makeAdminStatusJson());
+}
+
+void handleAdminTestPacket() {
+  if (!requireAdminAuthentication()) return;
+  sendNoCacheHeaders();
+  const char testMessage[] = "[LOCUS TEST] Diagnostic packet from node";
+  MeshPacket packet = {};
+  packet.magic = PACKET_MAGIC;
+  packet.version = 1;
+  packet.type = PUBLIC_MESSAGE;
+  packet.hops = MAX_HOPS;
+  packet.length = sizeof(testMessage) - 1;
+  memcpy(packet.origin, nodeMac, sizeof(nodeMac));
+  packet.sequence = nextSequence();
+  memcpy(packet.payload, testMessage, packet.length);
+  uint32_t id = publishLive(String(testMessage), "public", "", hashId(nodeMac));
+  if (id != 0) markEventMine(id, packet.sequence);
+  seenBeforeAndRemember(packet);
+  if (!broadcastPacket(packet)) {
+    server.send(500, "text/plain; charset=utf-8", "ESP-NOW broadcast request failed.");
+    return;
+  }
+  server.send(200, "text/plain; charset=utf-8", "Diagnostic test packet broadcast request accepted.");
+}
+
+void handleAdminReboot() {
+  if (!requireAdminAuthentication()) return;
+  sendNoCacheHeaders();
+  server.sendHeader("Connection", "close");
+  server.send(200, "text/plain; charset=utf-8", "Rebooting this Locus node. Reconnect after the access point returns.");
+  Serial.println("Administrator requested node reboot.");
+  delay(500);
+  ESP.restart();
+}
+
+bool requireOtaAuthentication() {
+  return requireAdminAuthentication();
+}
+
+void handleOtaPage() {
+  if (!requireOtaAuthentication()) return;
+  sendNoCacheHeaders();
+  server.send_P(200, "text/html; charset=utf-8", OTA_PAGE);
+}
+
+void handleOtaUpload() {
+  if (!adminSessionAuthenticated()) return;
+  HTTPUpload &upload = server.upload();
+  if (upload.status == UPLOAD_FILE_START) {
+    Serial.printf("OTA start: %s\n", upload.filename.c_str());
+    if (!Update.begin(UPDATE_SIZE_UNKNOWN)) Update.printError(Serial);
+  } else if (upload.status == UPLOAD_FILE_WRITE) {
+    size_t written = Update.write(upload.buf, upload.currentSize);
+    if (written != upload.currentSize) Update.printError(Serial);
+  } else if (upload.status == UPLOAD_FILE_END) {
+    if (Update.end(true)) Serial.printf("OTA complete: %u bytes\n", upload.totalSize);
+    else Update.printError(Serial);
+  } else if (upload.status == UPLOAD_FILE_ABORTED) {
+    Update.abort();
+    Serial.println("OTA upload aborted");
+  }
+  yield();
+}
+
+void handleOtaComplete() {
+  if (!requireOtaAuthentication()) return;
+  server.sendHeader("Connection", "close");
+  sendNoCacheHeaders();
+  if (Update.hasError()) {
+    server.send(500, "text/plain", "Firmware update failed. Keep the device connected and check Serial Monitor.");
+    return;
+  }
+  server.send(200, "text/plain", "Firmware updated. Locus is restarting.");
+  delay(800);
+  ESP.restart();
+}
+
 enum BatteryState { BAT_DISABLED = 0, BAT_OK = 1, BAT_NONE = 2, BAT_BAD_PIN = 3 };
 BatteryState batteryState = BAT_DISABLED;
 float batteryCellV = 0.0f;
@@ -1866,13 +2652,7 @@ bool batteryHaveSample = false;
 uint32_t batteryNextAt = 0;
 
 bool adcPinUsable(int pin) {
-#if defined(CONFIG_IDF_TARGET_ESP32C3)
-  return pin >= 0 && pin <= 4;
-#elif defined(CONFIG_IDF_TARGET_ESP32)
   return pin >= 32 && pin <= 39;
-#else
-  return pin >= 0;
-#endif
 }
 
 float socPercentFromVolts(float volts) {
@@ -2008,8 +2788,8 @@ bool rowBefore(const NodeRow &a, const NodeRow &b) {
 }
 
 void handleNodes() {
+  sendNoCacheHeaders();
   server.sendHeader("Access-Control-Allow-Origin", "*");
-  server.sendHeader("Cache-Control", "no-store");
   long limit = server.hasArg("limit") ? server.arg("limit").toInt() : 20;
   if (limit < 1) limit = 1;
   if (limit > (long)MAX_NODES) limit = (long)MAX_NODES;
@@ -2093,10 +2873,6 @@ void handleJoin() {
 void handleSend() {
   server.sendHeader("Access-Control-Allow-Origin", "*");
   uint32_t clientIP = (uint32_t)server.client().remoteIP();
-  if (checkRateLimit(clientIP)) {
-    server.send(429, "text/plain", "Rate limit: 1 message per 1.5 seconds.");
-    return;
-  }
 
   String message = server.hasArg("message") ? server.arg("message") : "";
   String type = server.hasArg("type") ? server.arg("type") : "";
@@ -2117,10 +2893,34 @@ void handleSend() {
     return;
   }
 
+  bool requestedEmergency = (server.hasArg("emergency") && server.arg("emergency") == "1") ||
+                            message.startsWith("[SOS]") || message.startsWith("[EMERGENCY BUTTON]");
+  bool safeStatus = message.indexOf("CLEAR / SAFE HERE") >= 0 ||
+                    message.indexOf("SAFE & FULLY ACCOUNTED") >= 0;
+  bool emergency = requestedEmergency && !safeStatus;
+
+  if (emergency && type != "public") {
+    server.send(400, "text/plain", "Emergency alerts must be sent to the public emergency feed.");
+    return;
+  }
+
+  if (emergency) {
+    uint32_t secondsRemaining = 0;
+    if (emergencyCooldownActive(clientIP, secondsRemaining)) {
+      server.sendHeader("Retry-After", String(secondsRemaining));
+      server.send(429, "text/plain", "Emergency cooldown active. Try again in " +
+                  String(secondsRemaining) + " seconds.");
+      return;
+    }
+  } else if (checkRateLimit(clientIP)) {
+    server.send(429, "text/plain", "Rate limit: 1 ordinary message per 1.5 seconds.");
+    return;
+  }
+
   MeshPacket packet = {};
   packet.magic = PACKET_MAGIC;
   packet.version = 1;
-  packet.type = type == "private" ? PRIVATE_MESSAGE : PUBLIC_MESSAGE;
+  packet.type = emergency ? EMERGENCY_MESSAGE : (type == "private" ? PRIVATE_MESSAGE : PUBLIC_MESSAGE);
   packet.hops = MAX_HOPS;
   packet.length = message.length();
   memcpy(packet.origin, nodeMac, sizeof(nodeMac));
@@ -2146,9 +2946,11 @@ void handleSend() {
     server.send(500, "text/plain", "ESP-NOW broadcast request failed.");
     return;
   }
+  if (emergency) rememberEmergencySent(clientIP);
 
   lastHeartbeatTx = millis();
-  String reply = "{\"id\":" + String(eventId) + ",\"boot\":" + String(bootId) + "}";
+  String reply = "{\"id\":" + String(eventId) + ",\"boot\":" + String(bootId) +
+                 ",\"emergency\":" + String(emergency ? "true" : "false") + "}";
   server.send(200, "application/json", reply);
 }
 
@@ -2205,7 +3007,7 @@ void meshBackgroundLogic() {
   }
 }
 
-#if !OGEMTN_SINGLE_CORE
+#if !LOCUS_SINGLE_CORE
 void meshTaskCore0(void *pvParameters) {
   for (;;) {
     meshBackgroundLogic();
@@ -2230,6 +3032,9 @@ void setup() {
   memset(groupPeers, 0, sizeof(groupPeers));
   memset(listeners, 0, sizeof(listeners));
 
+  nodePreferences.begin("locus", false);
+  nodeLocationLabel = nodePreferences.getString("location", "Unconfigured location");
+
   clearLiveEvents();
   txSequence = esp_random();
   bootId = esp_random();
@@ -2245,13 +3050,13 @@ void setup() {
     fatalError("Could not read ESP-NOW MAC. Restarting...");
   }
 
-  String ssid = "ESP_NOW_" + macString(nodeMac);
+  String ssid = "Locus_" + macString(nodeMac);
   if (!WiFi.softAP(ssid.c_str(), nullptr, WIFI_CHANNEL, false, 8)) {
     fatalError("Access point startup failed. Restarting...");
   }
 
   WiFi.setTxPower(WIFI_POWER_19_5dBm);
-  Serial.println("TX Power set to 19.5dBm on all boards.");
+  Serial.println("Configured Wi-Fi TX power: 19.5 dBm. Actual RF output depends on mode and hardware.");
 
   dnsServer.start(53, "*", apIP);
 
@@ -2279,11 +3084,35 @@ void setup() {
   esp_now_register_send_cb((esp_now_send_cb_t)sendCallback);
 #endif
 
+  const char *headerKeys[] = {"Cookie"};
+  server.collectHeaders(headerKeys, 1);
+
   server.on("/", HTTP_GET, handleHome);
+  server.on("/generate_204", HTTP_GET, handleHome);
+  server.on("/gen_204", HTTP_GET, handleHome);
+  server.on("/hotspot-detect.html", HTTP_GET, handleHome);
+  server.on("/library/test/success.html", HTTP_GET, handleHome);
+  server.on("/connecttest.txt", HTTP_GET, handleHome);
+  server.on("/ncsi.txt", HTTP_GET, handleHome);
+  server.on("/canonical.html", HTTP_GET, handleHome);
+  server.on("/success.txt", HTTP_GET, handleHome);
+  server.on("/fwlink", HTTP_GET, handleHome);
+  server.on("/redirect", HTTP_GET, handleHome);
+  server.on("/admin/login", HTTP_GET, handleAdminLoginPage);
+  server.on("/admin/login", HTTP_POST, handleAdminLogin);
+  server.on("/admin/logout", HTTP_POST, handleAdminLogout);
   server.on("/events", HTTP_GET, handleEvents);
   server.on("/send", HTTP_POST, handleSend);
   server.on("/join", HTTP_POST, handleJoin);
   server.on("/nodes", HTTP_GET, handleNodes);
+  server.on("/admin", HTTP_GET, handleAdminPage);
+  server.on("/admin/status", HTTP_GET, handleAdminStatus);
+  server.on("/admin/config", HTTP_POST, handleAdminConfig);
+  server.on("/admin/password", HTTP_POST, handleAdminPassword);
+  server.on("/admin/test", HTTP_POST, handleAdminTestPacket);
+  server.on("/admin/reboot", HTTP_POST, handleAdminReboot);
+  server.on("/ota", HTTP_GET, handleOtaPage);
+  server.on("/update", HTTP_POST, handleOtaComplete, handleOtaUpload);
 
   server.onNotFound([]() {
     if (server.method() == HTTP_OPTIONS) {
@@ -2292,21 +3121,26 @@ void setup() {
       server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
       server.send(204);
     } else {
+      sendNoCacheHeaders();
       server.sendHeader("Location", "http://192.168.4.1/", true);
-      server.send(302, "text/plain", "");
+      server.send(302, "text/plain; charset=utf-8", "Opening Locus portal…");
     }
   });
+
+  pinMode(EMERGENCY_BUTTON_PIN, INPUT_PULLUP);
+  pinMode(BUZZER_PIN, OUTPUT);
+  digitalWrite(BUZZER_PIN, LOW);
 
   batterySetup();
   server.begin();
   lastHeartbeatTx = millis() - 25000;
 
-#if !OGEMTN_SINGLE_CORE
+#if !LOCUS_SINGLE_CORE
   Serial.println("Dual-Core Supported: Pinning Heavy Crypto/Mesh processing to Core 0.");
   xTaskCreatePinnedToCore(meshTaskCore0, "MeshTask", 10240, NULL, 1, &meshTaskHandle, 0);
 #endif
 
-  Serial.println("OGEMTN Standard WebServer started.");
+  Serial.println("Locus web server started.");
 }
 
 void loop() {
@@ -2319,6 +3153,45 @@ void loop() {
       (unsigned)WiFi.channel(), (int)WiFi.softAPgetStationNum());
   }
 
+  bool buttonDown = digitalRead(EMERGENCY_BUTTON_PIN) == LOW;
+  if (buttonDown && !emergencyButtonWasDown) {
+    uint32_t now = millis();
+    bool cooldownExpired = !hardwareEmergencySent || (uint32_t)(now - lastHardwareEmergencyAt) >= EMERGENCY_COOLDOWN_MS;
+    if (cooldownExpired) {
+      lastHardwareEmergencyAt = now;
+      hardwareEmergencySent = true;
+      triggerBuzzer(5000);
+
+      String hwSosMsg = "[EMERGENCY BUTTON] Location: " + nodeLocationLabel + " | Assistance requested. Node: " + hashId(nodeMac);
+      if (hwSosMsg.length() > MAX_TEXT) hwSosMsg = hwSosMsg.substring(0, MAX_TEXT);
+
+      MeshPacket p = {};
+      p.magic = PACKET_MAGIC;
+      p.version = 1;
+      p.type = EMERGENCY_MESSAGE;
+      p.hops = MAX_HOPS;
+      p.length = hwSosMsg.length();
+      memcpy(p.origin, nodeMac, 6);
+      p.sequence = nextSequence();
+      memcpy(p.payload, hwSosMsg.c_str(), p.length);
+
+      uint32_t evId = publishLive(hwSosMsg, "public", "", hashId(nodeMac));
+      if (evId != 0) markEventMine(evId, p.sequence);
+      seenBeforeAndRemember(p);
+      broadcastPacket(p);
+      Serial.println("Physical SOS button: emergency packet broadcast.");
+    } else {
+      Serial.printf("Physical SOS cooldown active for %lu more seconds.\n",
+        (unsigned long)((EMERGENCY_COOLDOWN_MS - (now - lastHardwareEmergencyAt) + 999) / 1000));
+    }
+  }
+  emergencyButtonWasDown = buttonDown;
+
+  if (buzzerActive && (int32_t)(millis() - buzzerStopTime) >= 0) {
+    buzzerActive = false;
+    digitalWrite(BUZZER_PIN, LOW);
+  }
+
   if ((int32_t)(millis() - batteryNextAt) >= 0) {
     batteryNextAt = millis() + 2000;
     updateBattery();
@@ -2327,7 +3200,7 @@ void loop() {
   dnsServer.processNextRequest();
   server.handleClient();
 
-#if OGEMTN_SINGLE_CORE
+#if LOCUS_SINGLE_CORE
   meshBackgroundLogic();
 #endif
 

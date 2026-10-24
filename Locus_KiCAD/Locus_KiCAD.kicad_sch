@@ -4,6 +4,11 @@
 	(generator_version "10.0")
 	(uuid "1d08dbe4-bf5c-4c46-8933-91c2911ec207")
 	(paper "A4")
+	(title_block
+		(title "Locus PCB Design")
+		(date "2026-10-25")
+		(rev "1 ~ M. HAQUE")
+	)
 	(lib_symbols
 		(symbol "Connector:Barrel_Jack"
 			(pin_names
