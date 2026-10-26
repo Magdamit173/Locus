@@ -2166,7 +2166,9 @@ void receiveCallback(const uint8_t *macAddr, const uint8_t *data, int length) {
   if (queued != pdTRUE) statRxQueueFull++;
 }
 
-#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 5, 0)
+void sendCallback(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
+#elif ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
 void sendCallback(const uint8_t *macAddr, esp_now_send_status_t status) {
 #else
 void sendCallback(const uint8_t *macAddr, uint8_t status) {
